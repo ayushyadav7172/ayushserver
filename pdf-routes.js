@@ -1,6 +1,6 @@
 const express = require('express');
 const fileUpload = require('express-fileupload');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -235,7 +235,7 @@ function createPdfRouter(deps) {
     const cleaned = String(name || '')
       .replace(/[/\\?%*:|"<>\x00-\x1f]/g, '_')
       .replace(/\s+/g, '_')
-      .slice(0, 100);
+      .slice(0, 60);
     return cleaned || 'document';
   }
 
@@ -301,11 +301,12 @@ function createPdfRouter(deps) {
   }
 
   function buildDownloadUrl(filePath, download = true) {
-    const isRemote = filePath.startsWith(PROCESSED_DIR) || filePath.startsWith(TEMP_UPLOADS_DIR) || filePath.startsWith(UPLOAD_OUTPUT_DIR);
-    if (download) {
-      return isRemote ? `/api/download/${encodeURIComponent(path.basename(filePath))}` : `/api/pdf/download?path=${encodeURIComponent(filePath)}&download=1`;
+    const parent = path.dirname(filePath);
+    const isDirectInRoot = parent === PROCESSED_DIR || parent === TEMP_UPLOADS_DIR || parent === UPLOAD_OUTPUT_DIR;
+    if (download && isDirectInRoot) {
+      return `/api/download/${encodeURIComponent(path.basename(filePath))}`;
     }
-    return `/api/pdf/download?path=${encodeURIComponent(filePath)}`;
+    return `/api/pdf/download?path=${encodeURIComponent(filePath)}${download ? '&download=1' : ''}`;
   }
 
   function describeOutput(filePath) {
@@ -344,8 +345,8 @@ function createPdfRouter(deps) {
           maxBuffer: 20 * 1024 * 1024,
           windowsHide: true
         }, (err, stdout, stderr) => {
-          if (req && cleanupListener) {
-            req.off('close', cleanupListener);
+          if (cleanupListener && req && req.res) {
+            req.res.off('close', cleanupListener);
           }
 
           if (!err) {
@@ -367,13 +368,13 @@ function createPdfRouter(deps) {
           return reject(createHttpError(invalidPassword ? 400 : 500, `${label} failed: ${detail}`));
         });
 
-        if (req) {
+        if (req && req.res) {
           cleanupListener = () => {
-            if (child && !child.killed) {
+            if (!req.res.writableEnded && child && !child.killed) {
               try { child.kill('SIGKILL'); } catch (e) {}
             }
           };
-          req.once('close', cleanupListener);
+          req.res.once('close', cleanupListener);
         }
       } catch (spawnErr) {
         return reject(createHttpError(500, `${label} could not be started: ${spawnErr.message}`));
@@ -806,7 +807,6 @@ function createPdfRouter(deps) {
       await runCommand('qpdf', [`--password=${password}`, '--decrypt', sourcePath, outputPath], 'Password removal', 180000, req);
     } catch (err) {
       removeFileQuietly(outputPath);
-      if (cleanupTempUploadsOnError) cleanupTempUploadsOnError(sourcePath);
       throw err;
     }
 
@@ -877,11 +877,6 @@ function createPdfRouter(deps) {
       await savePdf(merged, outputPath);
     } catch (err) {
       removeFileQuietly(outputPath);
-      if (cleanupTempUploadsOnError) {
-        for (const s of sources) {
-          if (s.kind === 'direct' && s.path) cleanupTempUploadsOnError(s.path);
-        }
-      }
       throw err;
     } finally {
       merged = null;
@@ -1061,7 +1056,6 @@ function createPdfRouter(deps) {
       });
     } catch (err) {
       removeFileQuietly(outputPath);
-      if (cleanupTempUploadsOnError && source.path) cleanupTempUploadsOnError(source.path);
       throw err;
     } finally {
       for (const tempPath of tempPaths) {
@@ -1108,7 +1102,6 @@ function createPdfRouter(deps) {
       await savePdf(outputDoc, outputPath);
     } catch (err) {
       removeFileQuietly(outputPath);
-      if (cleanupTempUploadsOnError && source.path) cleanupTempUploadsOnError(source.path);
       throw err;
     } finally {
       bytes = null;
@@ -1163,7 +1156,6 @@ function createPdfRouter(deps) {
       await savePdf(pdfDoc, outputPath);
     } catch (err) {
       removeFileQuietly(outputPath);
-      if (cleanupTempUploadsOnError && source.path) cleanupTempUploadsOnError(source.path);
       throw err;
     } finally {
       bytes = null;
@@ -1251,11 +1243,6 @@ function createPdfRouter(deps) {
       await savePdf(pdfDoc, outputPath);
     } catch (err) {
       removeFileQuietly(outputPath);
-      if (cleanupTempUploadsOnError) {
-        for (const s of sources) {
-          if (s.kind === 'direct' && s.path) cleanupTempUploadsOnError(s.path);
-        }
-      }
       throw err;
     } finally {
       pdfDoc = null;
@@ -1301,7 +1288,8 @@ function createPdfRouter(deps) {
     const outputDir = uniqueOutputDir(parentDir, baseStem(sourceName));
     const prefix = path.join(outputDir, 'page');
 
-    const args = ['-jpeg', '-r', String(dpi)];
+    const formatFlag = (body.format && String(body.format).toLowerCase() === 'png') ? '-png' : '-jpeg';
+    const args = [formatFlag, '-r', String(dpi)];
     if (firstPage) args.push('-f', String(firstPage));
     if (lastPage) args.push('-l', String(lastPage));
     args.push(sourcePath, prefix);
@@ -1310,12 +1298,65 @@ function createPdfRouter(deps) {
       if (concurrencyLock && concurrencyLock.pdfJob && sourcePath) {
         concurrencyLock.pdfJob.activeFiles.add(path.resolve(sourcePath));
       }
-      await runCommand('pdftoppm', args, 'PDF to image conversion', 180000, req);
+
+      await new Promise((resolve, reject) => {
+        const proc = spawn('pdftoppm', args, {
+          windowsHide: true
+        });
+
+        let stderr = '';
+        let stdout = '';
+
+        proc.stdout.on('data', (d) => { stdout += d; });
+        proc.stderr.on('data', (d) => { stderr += d; });
+
+        const timeout = setTimeout(() => {
+          try { proc.kill('SIGKILL'); } catch (e) {}
+          reject(createHttpError(504, 'PDF to image conversion timed out after 3 minutes.'));
+        }, 180000);
+
+        proc.on('error', (err) => {
+          clearTimeout(timeout);
+          if (err.code === 'ENOENT') {
+            return reject(createHttpError(503, 'pdftoppm is not installed. Run: pkg install poppler'));
+          }
+          reject(createHttpError(500, `pdftoppm failed to start: ${err.message}`));
+        });
+
+        let isDone = false;
+        const abortHandler = () => {
+          if (!isDone && !res.writableEnded && !proc.killed) {
+            try { proc.kill('SIGKILL'); } catch (e) {}
+          }
+        };
+        res.once('close', abortHandler);
+
+        proc.on('close', (code) => {
+          isDone = true;
+          clearTimeout(timeout);
+          res.off('close', abortHandler);
+
+          // Check if images were written even if poppler exited with non-zero due to benign syntax/font warnings
+          const generated = fs.existsSync(outputDir)
+            ? fs.readdirSync(outputDir).filter((name) => /\.(jpe?g|png)$/i.test(name))
+            : [];
+
+          if (code === 0 || generated.length > 0) {
+            return resolve({ stdout, stderr, count: generated.length });
+          }
+
+          const lines = String(stderr || '').trim().split('\n').map((l) => l.trim()).filter(Boolean);
+          const detail = lines.length > 0 ? lines[lines.length - 1] : `pdftoppm exited with code ${code}`;
+          const isEncrypted = /password|encrypted/i.test(stderr);
+          reject(createHttpError(isEncrypted ? 400 : 500, isEncrypted ? 'The PDF is encrypted. Please unlock it first.' : `PDF to image conversion failed: ${detail}`));
+        });
+      });
     } catch (err) {
       try {
         fs.rmSync(outputDir, { recursive: true, force: true });
       } catch (cleanupErr) {}
-      if (cleanupTempUploadsOnError && sourcePath) cleanupTempUploadsOnError(sourcePath);
+      // NOTE: Do NOT delete sourcePath here! The uploaded input file must remain in temp_uploads
+      // so the user can retry without encountering a 404 error.
       throw err;
     }
 
