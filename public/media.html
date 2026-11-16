@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1115">
+  <title>Termux FFmpeg Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('ffstudio-theme');
+        if (t !== 'light' && t !== 'dark') {
+          t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- ================= TOP BAR ================= -->
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Termux Utility Studio home" style="text-decoration:none;color:inherit;">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+        </span>
+        <span class="brand-text">
+          <strong>FFmpeg Studio</strong>
+          <small>Direct Storage</small>
+        </span>
+      </a>
+
+      <!-- Wizard stepper (also acts as primary navigation) -->
+      <nav class="stepper" id="appSidebar" aria-label="Workflow steps">
+        <button class="nav-item active" data-tab="home" data-target="panel-explorer">
+          <span class="step-num">1</span>
+          <span class="step-label">Select File</span>
+        </button>
+        <span class="step-line" aria-hidden="true"></span>
+        <button class="nav-item" data-tab="operations" data-target="panel-operations">
+          <span class="step-num">2</span>
+          <span class="step-label">Configure</span>
+        </button>
+        <span class="step-line" aria-hidden="true"></span>
+        <button class="nav-item" data-tab="active-job" data-target="panel-active-job">
+          <span class="step-num">3</span>
+          <span class="step-label">Process</span>
+          <span class="pulse-indicator" id="activePulse" style="display:none"></span>
+        </button>
+        <button class="nav-item nav-item-utility" data-tab="history" data-target="panel-history">
+          <span class="step-label">History</span>
+        </button>
+      </nav>
+
+      <div class="topbar-actions">
+        <a class="btn btn-secondary btn-sm" href="/" title="Back to home">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px;"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>Home
+        </a>
+        <a class="btn btn-ghost btn-sm" href="/pdf" title="Open PDF &amp; Docs Studio">PDF Studio</a>
+        <span class="sys-status" title="FFmpeg status">
+          <span class="sys-dot" id="sysStatusDot"></span>
+          <span id="ffmpegVersionText">Checking FFmpeg…</span>
+        </span>
+        <button id="themeToggle" class="icon-btn" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>
+          </svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+        <button id="btnMobileMenu" class="icon-btn nav-toggle" type="button" aria-label="Toggle navigation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ================= MAIN ================= -->
+    <main class="main-content">
+
+      <!-- ============ STEP 1: SELECT FILE ============ -->
+      <section id="panel-explorer" class="content-panel active">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Step 1 of 3</span>
+            <h1>Select a media file</h1>
+            <p class="subtitle">Browse phone storage and pick a file. FFmpeg works on it in place — nothing is uploaded or duplicated.</p>
+          </div>
+        </header>
+
+        <div id="storageNoticeBanner" class="banner banner-warning" style="display:none;">
+          <span class="banner-text">
+            <strong>Storage access:</strong> If <code>/sdcard</code> looks empty, run <code>termux-setup-storage</code> in Termux and grant permission.
+          </span>
+          <button type="button" id="btnCopyStorageCmd" class="btn btn-ghost btn-sm">Copy command</button>
+        </div>
+
+        <div class="storage-mode-toggle" id="mediaStorageModeToggle" role="group" aria-label="Storage Mode">
+          <button type="button" class="mode-btn active" id="btnMediaModeLocal" data-mode="local">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+            <span>Local Storage (Server)</span>
+          </button>
+          <button type="button" class="mode-btn" id="btnMediaModeRemote" data-mode="remote">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            <span>Remote Upload (WAN)</span>
+          </button>
+        </div>
+
+        <!-- Local Storage File Selection -->
+        <div class="card" id="mediaLocalSection">
+          <div class="card-head">
+            <span class="card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h2>Browse storage</h2>
+              <p>Jump to a common folder or enter an absolute path.</p>
+            </div>
+            <button type="button" id="btnOpenExplorer" class="btn btn-primary">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+              <span>Open explorer</span>
+            </button>
+          </div>
+
+          <div class="chips">
+            <button type="button" class="chip-shortcut" data-path="/sdcard">📱 Internal</button>
+            <button type="button" class="chip-shortcut" data-path="/sdcard/Download">📥 Downloads</button>
+            <button type="button" class="chip-shortcut" data-path="/sdcard/Movies">🎬 Movies</button>
+            <button type="button" class="chip-shortcut" data-path="/sdcard/Music">🎵 Music</button>
+            <button type="button" class="chip-shortcut" data-path="/sdcard/DCIM">📸 DCIM</button>
+          </div>
+
+          <div class="field-row">
+            <input type="text" id="directPathInput" class="input" placeholder="Or paste an absolute path, e.g. /sdcard/Download/movie.mp4">
+            <button type="button" id="btnLoadPath" class="btn btn-secondary">Load</button>
+          </div>
+        </div>
+
+        <!-- Remote Upload (WAN) File Selection -->
+        <div class="card" id="mediaRemoteSection" style="display:none;">
+          <div class="card-head">
+            <span class="card-icon tone-teal">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h2>Remote Upload (WAN)</h2>
+              <p>Upload a video or audio file directly from your browser.</p>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="upload-dropzone" id="mediaDropzone">
+              <input type="file" id="mediaFileInput" accept="video/*,audio/*,.mp4,.mkv,.avi,.mov,.webm,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.ts,.3gp">
+              <div class="dropzone-icon">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+              </div>
+              <div class="dropzone-title">Drop your media file here or click to browse</div>
+              <div class="dropzone-note">Supports video and audio formats up to 2GB</div>
+              <div class="dropzone-auto-delete-tag">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <span>Files are auto-deleted after 30 mins</span>
+              </div>
+            </div>
+
+            <div id="mediaUploadProgress" class="upload-progress-wrap" style="display:none;">
+              <div class="upload-progress-bar-track">
+                <div class="upload-progress-bar-fill" id="mediaUploadProgressBar"></div>
+              </div>
+              <div class="upload-progress-info">
+                <span id="mediaUploadProgressText">Uploading: 0%</span>
+                <span id="mediaUploadSpeedText"></span>
+              </div>
+            </div>
+
+            <div id="mediaUploadTimer" class="countdown-timer-box" style="display:none;"></div>
+          </div>
+        </div>
+
+        <div id="selectedMediaCard" class="card card-selected" style="display:none;">
+          <div class="selected-top">
+            <span class="thumb" id="selectedMediaIcon">
+              <img id="selectedMediaThumbImg" class="thumb-img" style="display:none;" alt="Thumbnail">
+              <span id="selectedMediaIconFallback" class="thumb-fallback">🎬</span>
+            </span>
+            <div class="selected-info">
+              <h3 id="selectedMediaName">filename.mp4</h3>
+              <code id="selectedMediaPath" class="path-text">/sdcard/...</code>
+            </div>
+          </div>
+
+          <div id="selectedMediaPreviewWrap" class="preview-wrap" style="display:none;">
+            <video id="selectedMediaVideoPlayer" class="media-player" controls playsinline style="display:none;"></video>
+            <audio id="selectedMediaAudioPlayer" controls style="width:100%; display:none;"></audio>
+          </div>
+
+          <div class="pills" id="selectedMetaPills"></div>
+
+          <div class="actions-row">
+            <button type="button" id="btnReopenExplorer" class="btn btn-secondary">Change file</button>
+            <button type="button" id="btnClearSelectedFile" class="btn btn-danger-ghost">Remove</button>
+            <button type="button" id="btnProceedToOperations" class="btn btn-primary btn-push-right">
+              <span>Configure operations</span>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+                <polyline points="12 5 19 12 12 19"></polyline>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ STEP 2: CONFIGURE ============ -->
+      <section id="panel-operations" class="content-panel">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Step 2 of 3</span>
+            <h1>Configure operations</h1>
+            <p class="subtitle">Combine multiple operations on one file. Pick audio/subtitle tracks, then choose what to change.</p>
+          </div>
+          <div class="target-badge" id="targetFileBadge">
+            <span class="target-badge-label">Target</span>
+            <strong id="targetFileNameDisplay">No file selected</strong>
+          </div>
+        </header>
+
+        <div class="target-card" id="targetMediaCard" style="display:none;">
+          <span class="thumb" id="targetMediaIcon">
+            <img id="targetMediaThumbImg" class="thumb-img" style="display:none;" alt="Thumbnail">
+            <span id="targetMediaIconFallback" class="thumb-fallback">🎬</span>
+          </span>
+          <div class="target-info">
+            <h3 id="targetMediaName">filename.mkv</h3>
+            <code id="targetMediaPath" class="path-text">/sdcard/...</code>
+          </div>
+          <div class="pills pills-inline" id="targetMediaPills"></div>
+          <button type="button" id="btnRemoveTargetFile" class="btn btn-danger-ghost btn-sm">Clear</button>
+        </div>
+
+        <!-- Audio tracks -->
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-teal">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="22"></line>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>Audio tracks</h3>
+              <p>Choose which audio streams to keep. All are kept by default.</p>
+            </div>
+            <div class="link-actions">
+              <button type="button" id="btnAudioSelectAll" class="link-btn">Select all</button>
+              <button type="button" id="btnAudioDeselectAll" class="link-btn">Clear</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="audioTracksContainer" class="track-grid">
+              <div class="empty-note" id="audioEmptyNotice">
+                <span>No media file selected. Pick a file first to detect audio tracks.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Subtitles -->
+        <div class="card" id="subtitleSectionCard">
+          <div class="card-head">
+            <span class="card-icon tone-blue">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+                <path d="M7 15h4M15 15h2M7 11h2M13 11h4"></path>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>Subtitles</h3>
+              <p>Keep subtitles as selectable tracks or burn them into the video.</p>
+            </div>
+            <div class="link-actions">
+              <button type="button" id="btnSubSelectAll" class="link-btn">Select all</button>
+              <button type="button" id="btnSubDeselectAll" class="link-btn">Clear</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="subtitlesContainer" class="track-grid">
+              <div class="empty-note" id="subEmptyNotice">
+                <span>No subtitle tracks detected in this file.</span>
+              </div>
+            </div>
+
+            <div class="sub-mode" id="subModeContainer" style="display:none;">
+              <label class="field-label">Subtitle handling</label>
+              <div class="radio-row">
+                <label class="radio">
+                  <input type="radio" name="subtitleMode" id="subModeKeep" value="keep" checked>
+                  <span class="radio-dot"></span>
+                  <span>Keep as soft track (MP4 / MKV)</span>
+                </label>
+                <label class="radio">
+                  <input type="radio" name="subtitleMode" id="subModeBurn" value="burn">
+                  <span class="radio-dot"></span>
+                  <span>🔥 Burn into video (re-encode)</span>
+                </label>
+              </div>
+              <div id="subBurnOptions" style="display:none;" class="sub-burn">
+                <label for="subBurnSelect" class="field-label">Track to burn</label>
+                <select id="subBurnSelect" class="input"></select>
+                <small class="hint hint-warning">Burning subtitles forces video re-encoding and disables lossless copy.</small>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Operations -->
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-violet">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="17 1 21 5 17 9"></polyline>
+                <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
+                <polyline points="7 23 3 19 7 15"></polyline>
+                <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>Operations</h3>
+              <p>Enable one or more. They run together in a single FFmpeg pass.</p>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <!-- Convert -->
+            <div class="op" id="opBlockFormat">
+              <label class="op-head">
+                <span class="checkbox">
+                  <input type="checkbox" id="opCheckFormat">
+                  <span class="box"></span>
+                </span>
+                <span class="op-title">Convert format</span>
+                <span class="tag">Container</span>
+              </label>
+              <div class="op-body" id="opFormatControls" style="display:none;">
+                <div class="field">
+                  <label for="opFormatSelect" class="field-label">Target format</label>
+                  <select id="opFormatSelect" class="input">
+                    <option value="mp4" selected>MP4 — H.264 + AAC</option>
+                    <option value="mkv">MKV — Matroska</option>
+                    <option value="mp3">MP3 — audio</option>
+                    <option value="wav">WAV — PCM audio</option>
+                  </select>
+                </div>
+                <label class="checkbox checkbox-inline">
+                  <input type="checkbox" id="opCheckLossless" checked>
+                  <span class="box"></span>
+                  <span>Lossless mode (stream copy)</span>
+                </label>
+                <small class="hint hint-info">Remuxes without re-encoding — instant and lossless.</small>
+              </div>
+            </div>
+
+            <!-- Resize -->
+            <div class="op" id="opBlockResize">
+              <label class="op-head">
+                <span class="checkbox">
+                  <input type="checkbox" id="opCheckResize">
+                  <span class="box"></span>
+                </span>
+                <span class="op-title">Compress / Resize</span>
+                <span class="tag">Quality</span>
+              </label>
+              <div class="op-body" id="opResizeControls" style="display:none;">
+                <div class="grid-2">
+                  <div class="field">
+                    <label for="opResizeWidth" class="field-label">Width (px)</label>
+                    <input type="number" id="opResizeWidth" class="input" placeholder="1280">
+                  </div>
+                  <div class="field">
+                    <label for="opResizeHeight" class="field-label">Height (px)</label>
+                    <input type="number" id="opResizeHeight" class="input" placeholder="720">
+                  </div>
+                </div>
+                <div class="preset-row" id="resizePresetsContainer">
+                  <button type="button" class="btn btn-ghost btn-sm" id="btnPreset720">720p</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="btnPreset1080">1080p</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="btnPreset480">480p</button>
+                </div>
+
+                <div class="field" id="crfSliderContainer">
+                  <div class="slider-head">
+                    <label for="opCrf" class="field-label">CRF quality</label>
+                    <span id="opCrfDisplay" class="value-badge">23</span>
+                  </div>
+                  <input type="range" id="opCrf" min="18" max="35" value="23" class="range">
+                  <div class="slider-scale">
+                    <span>18 · best</span><span>23 · balanced</span><span>28 · smaller</span><span>35 · tiny</span>
+                  </div>
+                </div>
+
+                <div id="losslessEncodingNotice" class="notice" style="display:none;">
+                  ⚡ Lossless copy active — video and audio are stream-copied, CRF is ignored.
+                </div>
+
+                <label class="checkbox checkbox-inline spaced-top">
+                  <input type="checkbox" id="opCheckHwAccel">
+                  <span class="box"></span>
+                  <span>⚡ Hardware acceleration (Android MediaCodec)</span>
+                </label>
+                <small class="hint">Uses the device hardware encoder (h264_mediacodec) for faster encoding.</small>
+                <div id="hwBitrateContainer" style="display:none;" class="field spaced-top">
+                  <label for="opHwBitrate" class="field-label">Target bitrate</label>
+                  <select id="opHwBitrate" class="input">
+                    <option value="1M">1 Mbps — high compression</option>
+                    <option value="2M" selected>2 Mbps — balanced</option>
+                    <option value="4M">4 Mbps — high quality</option>
+                    <option value="6M">6 Mbps — ultra</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Trim -->
+            <div class="op" id="opBlockTrim">
+              <label class="op-head">
+                <span class="checkbox">
+                  <input type="checkbox" id="opCheckTrim">
+                  <span class="box"></span>
+                </span>
+                <span class="op-title">Trim</span>
+                <span class="tag">Time cut</span>
+              </label>
+              <div class="op-body" id="opTrimControls" style="display:none;">
+                <div class="grid-2">
+                  <div class="field">
+                    <div class="field-topline">
+                      <label for="opTrimStart" class="field-label">Start</label>
+                      <button type="button" id="btnMultiTrimStart" class="link-btn" title="Use preview player time">Use player time</button>
+                    </div>
+                    <input type="text" id="opTrimStart" class="input" placeholder="00:00:00" value="00:00:00">
+                  </div>
+                  <div class="field">
+                    <div class="field-topline">
+                      <label for="opTrimEnd" class="field-label">End</label>
+                      <button type="button" id="btnMultiTrimEnd" class="link-btn" title="Use preview player time">Use player time</button>
+                    </div>
+                    <input type="text" id="opTrimEnd" class="input" placeholder="00:01:00">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Audio only -->
+            <div class="op" id="opBlockAudioOnly">
+              <label class="op-head">
+                <span class="checkbox">
+                  <input type="checkbox" id="opCheckAudioOnly">
+                  <span class="box"></span>
+                </span>
+                <span class="op-title">Extract audio only</span>
+                <span class="tag">-vn</span>
+              </label>
+              <div class="op-body">
+                <small class="hint">Strips video and keeps audio. Pick MP3/WAV above, or keep the source container.</small>
+              </div>
+            </div>
+          </div>
+
+          <div class="summary">
+            <strong>Summary</strong>
+            <p id="operationsSummaryText">No operations selected. Enable one above to begin.</p>
+          </div>
+
+          <div class="card-foot">
+            <button type="button" id="btnExecuteAll" class="btn btn-primary btn-block btn-lg">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+              </svg>
+              <span>Run operations</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Advanced custom command -->
+        <div class="card collapsible" id="customCmdCard">
+          <div class="collapsible-head" id="btnToggleCustomCmd">
+            <span class="collapsible-title">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="4 17 10 11 4 5"></polyline>
+                <line x1="12" y1="19" x2="20" y2="19"></line>
+              </svg>
+              Advanced: custom FFmpeg command
+            </span>
+            <span class="collapsible-meta">
+              <span class="tag" id="customCmdBadge">Terminal</span>
+              <span class="collapsible-arrow" id="customCmdToggleArrow">▾</span>
+            </span>
+          </div>
+          <div class="collapsible-body" id="customCmdBody" style="display:none;">
+            <div class="notice notice-warning">Advanced users only — always include an output path in your command.</div>
+            <div class="field">
+              <label for="customCommandInput" class="field-label">Command line</label>
+              <textarea id="customCommandInput" class="input mono" rows="3" placeholder="ffmpeg -i {input} -c:v copy -c:a copy output.mp4" disabled></textarea>
+              <div class="hint-row">
+                <small class="hint">Use <code>{input}</code> for the selected file and <code>{output_dir}</code> for its folder.</small>
+                <span id="customCmdTargetNotice" class="hint">No file selected</span>
+              </div>
+            </div>
+            <div class="actions-row actions-end">
+              <button type="button" id="btnExecuteCustomCmd" class="btn btn-primary" disabled>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                <span>Run command</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Debug console -->
+        <div class="card" id="debugConsoleCard">
+          <div class="collapsible-head" id="btnToggleDebugConsole">
+            <span class="collapsible-title">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="4 17 10 11 4 5"></polyline>
+                <line x1="12" y1="19" x2="20" y2="19"></line>
+              </svg>
+              Debug console
+            </span>
+            <span class="collapsible-meta">
+              <span class="tag" id="debugStatusBadge">Ready</span>
+              <button type="button" id="btnCopyDebugCmd" class="btn btn-ghost btn-sm" title="Copy command">Copy</button>
+              <span class="collapsible-arrow" id="debugToggleArrow">▴</span>
+            </span>
+          </div>
+          <div class="collapsible-body" id="debugConsoleBody">
+            <pre class="code-block" id="debugCommandDisplay">ffmpeg -i ...</pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ STEP 3: PROCESS ============ -->
+      <section id="panel-active-job" class="content-panel">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Step 3 of 3</span>
+            <h1>Processing</h1>
+            <p class="subtitle">Live progress streamed from FFmpeg running inside Termux.</p>
+          </div>
+        </header>
+
+        <div id="noActiveJobState" class="empty-state">
+          <span class="empty-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+          </span>
+          <h3>No active process</h3>
+          <p>Select a file and run an operation to see progress here.</p>
+          <button class="btn btn-primary" onclick="switchPanel('panel-explorer')">Go to files</button>
+        </div>
+
+        <div id="activeJobMonitor" class="card" style="display:none;">
+          <div class="job-head">
+            <div class="job-head-left">
+              <span class="status-pill status-processing" id="activeJobStatusPill">Processing</span>
+              <h2 id="activeJobTitle">Operation</h2>
+            </div>
+            <div class="job-head-actions">
+              <button type="button" id="btnCancelJob" class="btn btn-danger" style="display:none;">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                  <rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect>
+                </svg>
+                <span>Stop</span>
+              </button>
+              <button id="btnViewActiveLogs" class="btn btn-ghost btn-sm">Logs</button>
+            </div>
+          </div>
+
+          <div class="command-box">
+            <span class="command-tag">Command</span>
+            <code id="activeJobCommand">ffmpeg ...</code>
+          </div>
+
+          <div class="progress-hero">
+            <div class="live-bar">
+              <span class="live-dot"></span>
+              <span id="termuxLiveStatus">Time: 00:00:00 / 00:00:00 | Speed: 0.0x | 0%</span>
+            </div>
+
+            <div class="progress-top">
+              <div class="big-percent" id="activePercentDisplay">0%</div>
+              <div class="stat-grid">
+                <div class="stat">
+                  <span class="stat-label">Elapsed</span>
+                  <span class="stat-value" id="activeTimeDisplay">00:00:00</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-label">Duration</span>
+                  <span class="stat-value" id="activeDurationDisplay">00:00:00</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-label">Speed</span>
+                  <span class="stat-value" id="activeSpeedDisplay">Calculating…</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-label">File</span>
+                  <span class="stat-value" id="activeFilenameDisplay">-</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="progress-track">
+              <div id="progressBar" class="progress-fill"></div>
+            </div>
+          </div>
+
+          <div id="jobResultPreviewBox" class="result" style="display:none;">
+            <div class="result-head">
+              <span class="result-badge">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                Complete
+              </span>
+              <span class="result-meta" id="resultMetaSize">Size: 0 MB</span>
+            </div>
+
+            <div id="directPathSuccessBanner" class="banner banner-success">
+              <div class="saved-path">
+                <span class="saved-path-label">Saved to</span>
+                <code id="savedPathLocation">/sdcard/...</code>
+                <button type="button" class="btn btn-ghost btn-sm" id="btnCopySavedPath">Copy path</button>
+              </div>
+            </div>
+
+            <div class="preview-wrap" id="mediaPreviewContainer"></div>
+
+            <div id="mediaOutputTimer" class="countdown-timer-box" style="display:none;"></div>
+
+            <div class="actions-row">
+              <a id="btnProminentDownload" href="#" download class="btn-download-prominent" style="display:none;">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                <span>Download Result</span>
+              </a>
+              <a id="btnDownloadOutput" href="#" download class="btn btn-secondary" style="display:none;">Download</a>
+              <button id="btnUseAsInput" class="btn btn-primary">Use as input for next operation</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ HISTORY ============ -->
+      <section id="panel-history" class="content-panel">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Activity</span>
+            <h1>Job history</h1>
+            <p class="subtitle">Recent FFmpeg processes and their logs.</p>
+          </div>
+          <div class="actions-row">
+            <button id="btnClearHistory" class="btn btn-ghost btn-sm">Clear</button>
+            <button id="btnRefreshHistory" class="btn btn-secondary btn-sm">Refresh</button>
+          </div>
+        </header>
+
+        <div id="historyContainer" class="history-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ============ FILE EXPLORER MODAL ============ -->
+  <div class="modal-overlay" id="fileExplorerModal" style="display:none;">
+    <div class="modal modal-lg">
+      <div class="modal-head">
+        <h3>Browse phone storage</h3>
+        <button class="btn-icon-close" id="btnCloseExplorer">✕</button>
+      </div>
+
+      <div class="explorer-toolbar">
+        <div class="toolbar-buttons">
+          <button type="button" class="btn btn-ghost btn-sm" id="btnExplorerUp" title="Parent folder">↑ Up</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnExplorerRefresh" title="Refresh">⟳</button>
+        </div>
+        <div class="breadcrumbs" id="explorerBreadcrumbs">
+          <span class="crumb active">/sdcard</span>
+        </div>
+      </div>
+
+      <div class="chips chips-tight">
+        <button type="button" class="mini-shortcut" data-path="/sdcard">📱 Internal</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/Download">📥 Downloads</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/Movies">🎬 Movies</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/Music">🎵 Music</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/DCIM">📸 DCIM</button>
+      </div>
+
+      <div class="search-bar">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="explorerSearchInput" placeholder="Filter files…">
+        <button type="button" id="btnClearSearch" class="search-clear" style="display:none;">✕</button>
+      </div>
+
+      <div class="explorer-body">
+        <div id="explorerLoading" class="explorer-loading" style="display:none;">
+          <span class="spinner"></span>
+          <span>Reading storage…</span>
+        </div>
+        <div id="explorerErrorBanner" class="banner banner-warning" style="display:none;"></div>
+        <div id="explorerItemList" class="explorer-list"></div>
+      </div>
+
+      <div class="modal-foot">
+        <span class="hint">Tap a folder to open · tap a media file to select</span>
+        <button type="button" class="btn btn-secondary" id="btnCancelExplorer">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ LOG MODAL ============ -->
+  <div class="modal-overlay" id="logModal" style="display:none;">
+    <div class="modal modal-lg">
+      <div class="modal-head">
+        <h3 id="modalTitle">FFmpeg logs</h3>
+        <button class="btn-icon-close" onclick="closeLogModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="command-box"><code id="modalCmdText">ffmpeg ...</code></div>
+        <pre class="code-block log-block" id="modalLogContent">Loading logs…</pre>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-secondary" onclick="copyLogModal()">Copy log</button>
+        <button class="btn btn-primary" onclick="closeLogModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1115">
+  <title>Image Studio · Termux Utility Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('ffstudio-theme');
+        if (t !== 'light' && t !== 'dark') {
+          t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/pdf.css">
+  <link rel="stylesheet" href="/image.css">
+</head>
+<body>
+  <div class="app-layout">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Back to home">
+        <span class="brand-mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <polyline points="21 15 16 10 5 21"></polyline>
+          </svg>
+        </span>
+        <span class="brand-text">
+          <strong>Image Studio</strong>
+          <small>Direct Storage</small>
+        </span>
+      </a>
+
+      <nav class="stepper pdf-tool-nav image-tool-nav" id="imageToolNav" aria-label="Image tools">
+        <button class="nav-item active" data-tool="convert" type="button">
+          <span class="step-label">Convert</span>
+        </button>
+        <button class="nav-item" data-tool="compress" type="button">
+          <span class="step-label">Compress</span>
+        </button>
+        <button class="nav-item" data-tool="resize" type="button">
+          <span class="step-label">Resize</span>
+        </button>
+      </nav>
+
+      <div class="topbar-actions">
+        <a class="btn btn-secondary btn-sm" href="/" title="Back to home">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px;"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>Home
+        </a>
+        <a class="btn btn-ghost btn-sm image-top-link" href="/pdf" title="Open PDF Studio">PDF Studio</a>
+        <a class="btn btn-ghost btn-sm image-top-link" href="/media" title="Open Media Studio">Media Studio</a>
+        <button id="themeToggle" class="icon-btn" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>
+          </svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+        <button id="btnMobileMenu" class="icon-btn nav-toggle" type="button" aria-label="Toggle navigation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="main-content image-main">
+      <section class="card image-target-card">
+        <div class="card-head">
+          <span class="card-icon tone-blue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+              <circle cx="8.5" cy="8.5" r="1.5"></circle>
+              <polyline points="21 15 16 10 5 21"></polyline>
+            </svg>
+          </span>
+          <div class="card-head-text">
+            <h3>Source images</h3>
+            <p>Select one image or a batch. The same operation is applied to every file in the queue.</p>
+          </div>
+          <span class="count-badge" id="imageCountBadge">0 images</span>
+        </div>
+
+        <div style="padding: 16px 20px 0;">
+          <div class="storage-mode-toggle" id="imageStorageModeToggle" role="group" aria-label="Storage Mode">
+            <button type="button" class="mode-btn active" id="btnImageModeLocal" data-mode="local">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+              <span>Local Storage (Server)</span>
+            </button>
+            <button type="button" class="mode-btn" id="btnImageModeRemote" data-mode="remote">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+              <span>Remote Upload (WAN)</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div id="imageLocalSection">
+            <div class="field">
+              <label class="field-label" for="imagePathInput">Add an image by path</label>
+              <div class="field-row image-picker-row">
+                <input type="text" class="input" id="imagePathInput" placeholder="/sdcard/DCIM/Camera/photo.jpg" autocomplete="off" spellcheck="false">
+                <button type="button" class="btn btn-secondary" id="btnImageAddPath">Add path</button>
+                <button type="button" class="btn btn-primary" id="btnImageBrowse">Browse images</button>
+                <button type="button" class="btn btn-ghost" id="btnImageClear">Clear all</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="imageRemoteSection" style="display:none; margin-bottom: 16px;">
+            <div class="upload-dropzone" id="imageDropzone">
+              <input type="file" id="imageFileInput" accept="image/*,.jpg,.jpeg,.png,.webp,.avif,.tif,.tiff" multiple>
+              <div class="dropzone-icon">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+              </div>
+              <div class="dropzone-title">Drop your images here or click to browse</div>
+              <div class="dropzone-note">Select one image or multiple images for batch processing</div>
+              <div class="dropzone-auto-delete-tag">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <span>Files are auto-deleted after 30 mins</span>
+              </div>
+            </div>
+
+            <div id="imageUploadProgress" class="upload-progress-wrap" style="display:none;">
+              <div class="upload-progress-bar-track">
+                <div class="upload-progress-bar-fill" id="imageUploadProgressBar"></div>
+              </div>
+              <div class="upload-progress-info">
+                <span id="imageUploadProgressText">Uploading: 0%</span>
+                <span id="imageUploadSpeedText"></span>
+              </div>
+            </div>
+
+            <div id="imageUploadTimer" class="countdown-timer-box" style="display:none;"></div>
+          </div>
+
+          <div class="image-workspace">
+            <div class="image-list-wrap">
+              <div class="image-list-head">
+                <span class="field-label">Batch queue</span>
+                <span class="hint">Tap a file to preview it</span>
+              </div>
+              <div class="file-stack image-stack" id="imageList">
+                <div class="file-stack-empty">No images selected yet. Browse phone storage or paste an absolute path.</div>
+              </div>
+            </div>
+
+            <div class="image-preview-panel">
+              <div class="image-preview-frame" id="imagePreviewFrame">
+                <div class="image-preview-empty" id="imagePreviewEmpty">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                    <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                  </svg>
+                  <span>Your preview appears here</span>
+                </div>
+                <img id="imagePreviewImg" alt="" style="display:none;">
+              </div>
+              <div class="image-preview-meta">
+                <strong id="imagePreviewName">No image selected</strong>
+                <span id="imagePreviewMeta">JPG · PNG · WebP · AVIF · TIFF</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="image-size-strip" aria-live="polite">
+            <div class="image-size-item">
+              <span>Original</span>
+              <strong id="originalSizeValue">—</strong>
+            </div>
+            <div class="image-size-item">
+              <span>Estimated output</span>
+              <strong id="estimatedSizeValue">—</strong>
+            </div>
+            <div class="image-size-item">
+              <span>Actual output</span>
+              <strong id="actualSizeValue">—</strong>
+            </div>
+            <div class="image-size-item">
+              <span>Source format</span>
+              <strong id="sourceFormatValue">—</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-panel active" id="panel-convert">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Transform</span>
+            <h1>Convert image format</h1>
+            <p class="subtitle">Move between JPG, PNG, WebP, and AVIF with a quality slider for lossy formats. PNG output stays lossless.</p>
+          </div>
+          <span class="pdf-engine-badge"><span class="sys-dot"></span> sharp engine</span>
+        </header>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-violet">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 14h6v6"></path>
+                <path d="M20 10h-6V4"></path>
+                <path d="M14 10l7-7"></path>
+                <path d="M10 14l-7 7"></path>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>Format settings</h3>
+              <p>Quality only applies to JPG, WebP, and AVIF outputs.</p>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="grid-2 image-options-grid">
+              <div class="field">
+                <label class="field-label" for="convertFormat">Output format</label>
+                <select class="input" id="convertFormat">
+                  <option value="jpeg" selected>JPG · photo friendly</option>
+                  <option value="png">PNG · lossless + alpha</option>
+                  <option value="webp">WebP · small, modern</option>
+                  <option value="avif">AVIF · smallest, modern</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="field-label" for="convertOutDir">Output folder (optional)</label>
+                <input type="text" class="input" id="convertOutDir" placeholder="Same folder as each source">
+              </div>
+            </div>
+
+            <div class="field image-quality-field" id="convertQualityField">
+              <div class="slider-head">
+                <label class="field-label" for="convertQuality">Quality</label>
+                <span class="value-badge" id="convertQualityValue">85</span>
+              </div>
+              <input type="range" class="range" id="convertQuality" min="1" max="100" value="85">
+              <div class="slider-scale"><span>Smaller file</span><span>Best quality</span></div>
+            </div>
+
+            <label class="checkbox spaced-top">
+              <input type="checkbox" id="convertStripExif" checked>
+              <span class="box"></span>
+              <span>Remove EXIF data <span class="hint">(camera, GPS, timestamps)</span></span>
+            </label>
+
+            <div class="pdf-action-row">
+              <span class="hint" id="convertEstimateHint">Select images to see an estimate.</span>
+              <button type="button" class="btn btn-primary btn-lg" id="btnConvertRun">Convert images</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-panel" id="panel-compress">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Optimize</span>
+            <h1>Compress images</h1>
+            <p class="subtitle">Reduce the file size by percent or hit an exact target. The encoder lowers quality and, when needed, scales dimensions proportionally.</p>
+          </div>
+          <span class="pdf-engine-badge"><span class="sys-dot"></span> smart target</span>
+        </header>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-teal">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 14h6v6"></path>
+                <path d="M20 10h-6V4"></path>
+                <path d="M14 10l7-7"></path>
+                <path d="M10 14l-7 7"></path>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>Compression mode</h3>
+              <p>Percent reduces toward that share of the original size. Target size aims for an exact budget.</p>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="segmented" id="compressMode" role="group" aria-label="Compression mode">
+              <button type="button" class="segmented-btn active" data-mode="percent">By percent</button>
+              <button type="button" class="segmented-btn" data-mode="target">Target size</button>
+            </div>
+
+            <div id="compressPercentGroup">
+              <div class="field image-quality-field">
+                <div class="slider-head">
+                  <label class="field-label" for="compressPercent">Target size percentage</label>
+                  <span class="value-badge" id="compressPercentValue">50%</span>
+                </div>
+                <input type="range" class="range" id="compressPercent" min="1" max="95" value="50">
+                <div class="slider-scale"><span>Maximum savings</span><span>Closest to original</span></div>
+              </div>
+            </div>
+
+            <div id="compressTargetGroup" style="display:none;">
+              <div class="grid-2 image-options-grid">
+                <div class="field">
+                  <label class="field-label" for="compressTargetValue">Target file size</label>
+                  <div class="image-unit-row">
+                    <input type="number" class="input" id="compressTargetValue" min="1" step="1" value="500" inputmode="numeric">
+                    <select class="input" id="compressTargetUnit" aria-label="Target size unit">
+                      <option value="KB" selected>KB</option>
+                      <option value="MB">MB</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="field-label">Quick targets</label>
+                  <div class="chips image-target-presets">
+                    <button type="button" class="mini-shortcut" data-target="200" data-unit="KB">200 KB</button>
+                    <button type="button" class="mini-shortcut" data-target="500" data-unit="KB">500 KB</button>
+                    <button type="button" class="mini-shortcut" data-target="1" data-unit="MB">1 MB</button>
+                    <button type="button" class="mini-shortcut" data-target="2" data-unit="MB">2 MB</button>
+                  </div>
+                </div>
+              </div>
+              <div class="notice image-notice">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="flex:0 0 auto;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                <span>A binary search finds the highest quality that fits within 7 encode attempts. If quality alone cannot reach the target, dimensions are reduced proportionally and retried.</span>
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="compressOutDir">Output folder (optional)</label>
+              <input type="text" class="input" id="compressOutDir" placeholder="Same folder as each source">
+            </div>
+
+            <label class="checkbox spaced-top">
+              <input type="checkbox" id="compressStripExif" checked>
+              <span class="box"></span>
+              <span>Remove EXIF data <span class="hint">(recommended for privacy)</span></span>
+            </label>
+
+            <div class="pdf-action-row">
+              <span class="hint" id="compressEstimateHint">Select images to see an estimate.</span>
+              <button type="button" class="btn btn-primary btn-lg" id="btnCompressRun">Compress images</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-panel" id="panel-resize">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Scale</span>
+            <h1>Resize images</h1>
+            <p class="subtitle">Choose exact pixel dimensions or scale the whole batch by percentage. Aspect ratio is preserved and images are never enlarged.</p>
+          </div>
+          <span class="pdf-engine-badge"><span class="sys-dot"></span> sharp engine</span>
+        </header>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-blue">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <polyline points="9 21 3 21 3 15"></polyline>
+                <line x1="21" y1="3" x2="14" y2="10"></line>
+                <line x1="3" y1="21" x2="10" y2="14"></line>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>Resize mode</h3>
+              <p>Enter a width, a height, or both. Leave one blank to preserve the aspect ratio.</p>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="segmented" id="resizeMode" role="group" aria-label="Resize mode">
+              <button type="button" class="segmented-btn active" data-mode="dimensions">Dimensions</button>
+              <button type="button" class="segmented-btn" data-mode="percent">Percentage</button>
+            </div>
+
+            <div class="grid-2 image-options-grid" id="resizeDimensionsGroup">
+              <div class="field">
+                <label class="field-label" for="resizeWidth">Width (px)</label>
+                <input type="number" class="input" id="resizeWidth" min="1" max="20000" step="1" placeholder="e.g. 1920" inputmode="numeric">
+              </div>
+              <div class="field">
+                <label class="field-label" for="resizeHeight">Height (px)</label>
+                <input type="number" class="input" id="resizeHeight" min="1" max="20000" step="1" placeholder="Auto from aspect ratio" inputmode="numeric">
+              </div>
+            </div>
+
+            <div id="resizePercentGroup" style="display:none;">
+              <div class="field image-quality-field">
+                <div class="slider-head">
+                  <label class="field-label" for="resizePercent">Scale</label>
+                  <span class="value-badge" id="resizePercentValue">50%</span>
+                </div>
+                <input type="range" class="range" id="resizePercent" min="1" max="100" value="50">
+                <div class="slider-scale"><span>25%</span><span>50%</span><span>100%</span></div>
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="resizeOutDir">Output folder (optional)</label>
+              <input type="text" class="input" id="resizeOutDir" placeholder="Same folder as each source">
+            </div>
+
+            <label class="checkbox spaced-top">
+              <input type="checkbox" id="resizeStripExif" checked>
+              <span class="box"></span>
+              <span>Remove EXIF data <span class="hint">(camera, GPS, timestamps)</span></span>
+            </label>
+
+            <div class="pdf-action-row">
+              <span class="hint" id="resizeEstimateHint">Select images to see an estimate.</span>
+              <button type="button" class="btn btn-primary btn-lg" id="btnResizeRun">Resize images</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="card pdf-result image-result" id="imageResult" style="display:none;"></div>
+    </main>
+  </div>
+
+  <div class="modal-overlay" id="imageExplorerModal" style="display:none;">
+    <div class="modal modal-lg">
+      <div class="modal-head">
+        <h3 id="imageExplorerTitle">Select images</h3>
+        <button class="btn-icon-close" id="btnImageExplorerClose" type="button" aria-label="Close">✕</button>
+      </div>
+
+      <div class="explorer-toolbar">
+        <div class="toolbar-buttons">
+          <button type="button" class="btn btn-ghost btn-sm" id="btnImageExplorerUp" title="Parent folder">↑ Up</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnImageExplorerRefresh" title="Refresh">⟳</button>
+        </div>
+        <div class="breadcrumbs" id="imageExplorerBreadcrumbs">
+          <span class="crumb active">/sdcard</span>
+        </div>
+      </div>
+
+      <div class="chips chips-tight">
+        <button type="button" class="mini-shortcut" data-path="/sdcard">Internal</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/DCIM">DCIM</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/Pictures">Pictures</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/Download">Downloads</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/Documents">Documents</button>
+      </div>
+
+      <div class="search-bar">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="imageExplorerSearch" placeholder="Filter files…">
+        <button type="button" id="btnImageExplorerClearSearch" class="search-clear" style="display:none;">✕</button>
+      </div>
+
+      <div class="explorer-body">
+        <div id="imageExplorerLoading" class="explorer-loading" style="display:none;">
+          <span class="spinner"></span>
+          <span>Reading storage…</span>
+        </div>
+        <div id="imageExplorerError" class="banner banner-warning" style="display:none;"></div>
+        <div id="imageExplorerList" class="explorer-list"></div>
+      </div>
+
+      <div class="modal-foot">
+        <span class="hint" id="imageExplorerHint">Tap image files to select them.</span>
+        <div class="actions-row pdf-explorer-foot-actions">
+          <button type="button" class="btn btn-secondary" id="btnImageExplorerCancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="btnImageExplorerConfirm" disabled>Use selected</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="/image.js"></script>
+</body>
+</html>

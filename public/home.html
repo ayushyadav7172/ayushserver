@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1115">
+  <title>Termux Utility Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('ffstudio-theme');
+        if (t !== 'light' && t !== 'dark') {
+          t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/home.css">
+</head>
+<body>
+  <div class="app-layout">
+    <header class="topbar">
+      <a class="brand home-brand" href="/" aria-label="Termux Utility Studio home">
+        <span class="brand-mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+            <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+            <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+            <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
+          </svg>
+        </span>
+        <span class="brand-text">
+          <strong>Termux Utility Studio</strong>
+          <small>Local · Private · All-in-one</small>
+        </span>
+      </a>
+
+      <div class="topbar-actions">
+        <span class="sys-status" title="Server status">
+          <span class="sys-dot"></span>
+          <span>Running locally</span>
+        </span>
+        <button id="themeToggle" class="icon-btn" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>
+          </svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="main-content home-main">
+      <div class="home-wrap">
+        <section class="home-hero">
+          <span class="home-kicker">Your phone. Your files. Your studio.</span>
+          <h1>Three powerful studios.<br><span>One private workspace.</span></h1>
+          <p>Process media with FFmpeg, handle PDFs with native Termux tools, and edit images with sharp. Nothing leaves your device.</p>
+        </section>
+
+        <div class="studio-grid">
+          <a class="studio-card studio-media" href="/media">
+            <span class="studio-glow" aria-hidden="true"></span>
+            <div class="studio-card-top">
+              <span class="studio-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="6 3 20 12 6 21 6 3"></polygon>
+                </svg>
+              </span>
+              <span class="studio-badge">FFmpeg engine</span>
+            </div>
+            <h2>Media Studio</h2>
+            <p>Convert, trim, compress, extract audio, manage subtitle tracks, and run custom FFmpeg commands on files in phone storage.</p>
+            <div class="studio-chips">
+              <span>Convert</span>
+              <span>Trim</span>
+              <span>Compress</span>
+              <span>Audio</span>
+              <span>Subtitles</span>
+            </div>
+            <div class="studio-cta">
+              <span>Open Media Studio</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+                <polyline points="12 5 19 12 12 19"></polyline>
+              </svg>
+            </div>
+          </a>
+
+          <a class="studio-card studio-pdf" href="/pdf">
+            <span class="studio-glow" aria-hidden="true"></span>
+            <div class="studio-card-top">
+              <span class="studio-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <path d="M9 13h6M9 17h4"></path>
+                </svg>
+              </span>
+              <span class="studio-badge">qpdf + pdf-lib + gs</span>
+            </div>
+            <h2>PDF &amp; Docs Studio</h2>
+            <p>Remove passwords, merge, split, rotate, and compress documents. Turn photos into a single PDF or export PDF pages as JPG images.</p>
+            <div class="studio-chips">
+              <span>Unlock</span>
+              <span>Merge</span>
+              <span>Split</span>
+              <span>Rotate</span>
+              <span>Compress</span>
+              <span>Images → PDF</span>
+              <span>PDF → Images</span>
+            </div>
+            <div class="studio-cta">
+              <span>Open PDF &amp; Docs Studio</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+                <polyline points="12 5 19 12 12 19"></polyline>
+              </svg>
+            </div>
+          </a>
+
+          <a class="studio-card studio-image" href="/image">
+            <span class="studio-glow" aria-hidden="true"></span>
+            <div class="studio-card-top">
+              <span class="studio-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                  <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                  <polyline points="21 15 16 10 5 21"></polyline>
+                </svg>
+              </span>
+              <span class="studio-badge">sharp engine</span>
+            </div>
+            <h2>Image Studio</h2>
+            <p>Convert between JPG, PNG, WebP, and AVIF, hit exact file-size targets, resize in batches, and strip EXIF metadata for privacy.</p>
+            <div class="studio-chips">
+              <span>Convert</span>
+              <span>Compress</span>
+              <span>Target size</span>
+              <span>Resize</span>
+              <span>EXIF cleanup</span>
+              <span>Batch</span>
+            </div>
+            <div class="studio-cta">
+              <span>Open Image Studio</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+                <polyline points="12 5 19 12 12 19"></polyline>
+              </svg>
+            </div>
+          </a>
+        </div>
+
+        <div class="home-foot">
+          <span class="home-foot-dot"></span>
+          <span>Direct storage processing. No uploads, no accounts, no cloud.</span>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      var toggle = document.getElementById('themeToggle');
+      var root = document.documentElement;
+      if (!toggle) return;
+      toggle.addEventListener('click', function () {
+        var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        try { localStorage.setItem('ffstudio-theme', next); } catch (e) {}
+      });
+    })();
+  </script>
+</body>
+</html>

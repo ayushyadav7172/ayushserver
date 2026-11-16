@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1115">
+  <title>PDF &amp; Docs Studio · Termux Utility Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('ffstudio-theme');
+        if (t !== 'light' && t !== 'dark') {
+          t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/pdf.css">
+</head>
+<body>
+  <div class="app-layout">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Back to home">
+        <span class="brand-mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <path d="M9 13h6M9 17h4"></path>
+          </svg>
+        </span>
+        <span class="brand-text">
+          <strong>PDF &amp; Docs Studio</strong>
+          <small>Direct Storage</small>
+        </span>
+      </a>
+
+      <nav class="stepper pdf-tool-nav" id="pdfToolNav" aria-label="PDF tools">
+        <button class="nav-item active" data-tool="unlock" type="button">
+          <span class="step-label">Unlock</span>
+        </button>
+        <button class="nav-item" data-tool="merge" type="button">
+          <span class="step-label">Merge</span>
+        </button>
+        <button class="nav-item" data-tool="split" type="button">
+          <span class="step-label">Split</span>
+        </button>
+        <button class="nav-item" data-tool="rotate" type="button">
+          <span class="step-label">Rotate</span>
+        </button>
+        <button class="nav-item" data-tool="compress" type="button">
+          <span class="step-label">Compress</span>
+        </button>
+        <button class="nav-item" data-tool="images" type="button">
+          <span class="step-label">Images → PDF</span>
+        </button>
+        <button class="nav-item" data-tool="toimages" type="button">
+          <span class="step-label">PDF → Images</span>
+        </button>
+      </nav>
+
+      <div class="topbar-actions">
+        <a class="btn btn-secondary btn-sm" href="/" title="Back to home">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px;"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>Home
+        </a>
+        <a class="btn btn-ghost btn-sm" href="/media" title="Open Media Studio">Media Studio</a>
+        <button id="themeToggle" class="icon-btn" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>
+          </svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+        <button id="btnMobileMenu" class="icon-btn nav-toggle" type="button" aria-label="Toggle navigation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="main-content pdf-main">
+      <div class="storage-mode-toggle" id="pdfStorageModeToggle" role="group" aria-label="Storage Mode">
+        <button type="button" class="mode-btn active" id="btnPdfModeLocal" data-mode="local">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+          <span>Local Storage (Server)</span>
+        </button>
+        <button type="button" class="mode-btn" id="btnPdfModeRemote" data-mode="remote">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+          <span>Remote Upload (WAN)</span>
+        </button>
+      </div>
+
+      <section class="content-panel active" id="panel-unlock">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Security</span>
+            <h1>Remove a PDF password</h1>
+            <p class="subtitle">Decrypt a PDF you own with its password. qpdf runs locally and writes an unlocked copy.</p>
+          </div>
+          <span class="pdf-engine-badge"><span class="sys-dot"></span> qpdf</span>
+        </header>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-teal">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+                <path d="M7 11V8a5 5 0 0 1 9.9-1"></path>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>Protected document</h3>
+              <p>Select the encrypted PDF and enter its current password.</p>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="pdf-local-only">
+              <div class="field">
+                <label class="field-label" for="unlockPath">PDF file</label>
+                <div class="field-row pdf-picker-row">
+                  <input type="text" class="input" id="unlockPath" placeholder="/sdcard/Download/document.pdf">
+                  <button type="button" class="btn btn-primary" id="btnUnlockBrowse">Browse</button>
+                  <button type="button" class="btn btn-ghost" id="btnUnlockClear">Clear</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="pdf-remote-only" style="display:none; margin-bottom:14px;">
+              <div class="upload-dropzone" data-target-input="unlockPath">
+                <input type="file" class="pdf-remote-input" accept=".pdf">
+                <div class="dropzone-icon">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                </div>
+                <div class="dropzone-title">Drop PDF file here or click to browse</div>
+                <div class="dropzone-note">Select an encrypted PDF to decrypt</div>
+                <div class="dropzone-auto-delete-tag">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                  <span>Files are auto-deleted after 30 mins</span>
+                </div>
+              </div>
+              <div id="unlockUploadTimer" class="countdown-timer-box" style="display:none;"></div>
+            </div>
+
+            <div class="grid-2 pdf-options-grid">
+              <div class="field">
+                <label class="field-label" for="unlockPassword">Password</label>
+                <input type="password" class="input" id="unlockPassword" placeholder="Current PDF password" autocomplete="off">
+              </div>
+              <div class="field">
+                <label class="field-label" for="unlockOutDir">Output folder (optional)</label>
+                <input type="text" class="input" id="unlockOutDir" placeholder="Same folder as source">
+              </div>
+            </div>
+
+            <div class="pdf-action-row">
+              <span class="hint">The original PDF is never modified.</span>
+              <button type="button" class="btn btn-primary btn-lg" id="btnUnlockRun">Remove password</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card pdf-result" id="unlockResult" style="display:none;"></div>
+      </section>
+
+      <section class="content-panel" id="panel-merge">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Combine</span>
+            <h1>Merge PDFs</h1>
+            <p class="subtitle">Add PDFs in the order you want them joined. Pages are copied losslessly with pdf-lib.</p>
+          </div>
+          <span class="pdf-engine-badge"><span class="sys-dot"></span> pdf-lib</span>
+        </header>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-blue">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="12 2 22 8 12 14 2 8 12 2"></polygon>
+                <polyline points="2 14 12 20 22 14"></polyline>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>Documents to merge</h3>
+              <p>Select two or more PDFs. Use the arrows to control their order.</p>
+            </div>
+            <span class="count-badge" id="mergeCountBadge">0 files</span>
+          </div>
+
+          <div class="card-body">
+            <div class="pdf-local-only">
+              <div class="field">
+                <label class="field-label" for="mergePathInput">Add a PDF by path</label>
+                <div class="field-row pdf-picker-row">
+                  <input type="text" class="input" id="mergePathInput" placeholder="/sdcard/Documents/part1.pdf">
+                  <button type="button" class="btn btn-secondary" id="btnMergeAddPath">Add path</button>
+                  <button type="button" class="btn btn-primary" id="btnMergeBrowse">Browse PDFs</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="pdf-remote-only" style="display:none; margin-bottom:14px;">
+              <div class="upload-dropzone" data-target-queue="merge">
+                <input type="file" class="pdf-remote-input" accept=".pdf" multiple>
+                <div class="dropzone-icon">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                </div>
+                <div class="dropzone-title">Drop PDF files here or click to browse</div>
+                <div class="dropzone-note">Upload multiple PDFs to merge them</div>
+                <div class="dropzone-auto-delete-tag">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                  <span>Files are auto-deleted after 30 mins</span>
+                </div>
+              </div>
+              <div id="mergeUploadTimer" class="countdown-timer-box" style="display:none;"></div>
+            </div>
+
+            <div class="file-stack" id="mergeList">
+              <div class="file-stack-empty">No PDFs selected yet. Add at least two files.</div>
+            </div>
+
+            <div class="field pdf-spaced-top">
+              <label class="field-label" for="mergeOutDir">Output folder (optional)</label>
+              <input type="text" class="input" id="mergeOutDir" placeholder="Same folder as the first PDF">
+            </div>
+
+            <div class="pdf-action-row">
+              <span class="hint" id="mergeHint">The merged file is saved beside the first PDF.</span>
+              <button type="button" class="btn btn-primary btn-lg" id="btnMergeRun">Merge PDFs</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card pdf-result" id="mergeResult" style="display:none;"></div>
+      </section>
+
+      <section class="content-panel" id="panel-compress">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Optimize</span>
+            <h1>Compress a PDF</h1>
+            <p class="subtitle">Shrink large documents with lossless qpdf optimization and optional Ghostscript recompression. The original file is never modified.</p>
+          </div>
+          <span class="pdf-engine-badge"><span class="sys-dot"></span> qpdf + gs</span>
+        </header>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-teal">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 14h6v6"></path>
+                <path d="M20 10h-6V4"></path>
+                <path d="M14 10l7-7"></path>
+                <path d="M10 14l-7 7"></path>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>PDF to optimize</h3>
+              <p>Pick a PDF and choose how aggressively it should be compressed.</p>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="pdf-local-only">
+              <div class="field">
+                <label class="field-label" for="compressPath">PDF file</label>
+                <div class="field-row pdf-picker-row">
+                  <input type="text" class="input" id="compressPath" placeholder="/sdcard/Download/large-document.pdf">
+                  <button type="button" class="btn btn-primary" id="btnCompressBrowse">Browse</button>
+                  <button type="button" class="btn btn-ghost" id="btnCompressClear">Clear</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="pdf-remote-only" style="display:none; margin-bottom:14px;">
+              <div class="upload-dropzone" data-target-input="compressPath">
+                <input type="file" class="pdf-remote-input" accept=".pdf">
+                <div class="dropzone-icon">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                </div>
+                <div class="dropzone-title">Drop PDF file here or click to browse</div>
+                <div class="dropzone-note">Select a PDF to compress</div>
+                <div class="dropzone-auto-delete-tag">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                  <span>Files are auto-deleted after 30 mins</span>
+                </div>
+              </div>
+              <div id="compressUploadTimer" class="countdown-timer-box" style="display:none;"></div>
+            </div>
+
+            <div class="grid-2 pdf-options-grid">
+              <div class="field">
+                <label class="field-label" for="compressLevel">Compression level</label>
+                <select class="input" id="compressLevel">
+                  <option value="balanced" selected>Balanced · recommended</option>
+                  <option value="strong">Strong · smallest file</option>
+                  <option value="light">Light · best quality</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="field-label" for="compressOutDir">Output folder (optional)</label>
+                <input type="text" class="input" id="compressOutDir" placeholder="Same folder as the PDF">
+              </div>
+            </div>
+
+            <div class="hint" id="compressEngineHint">qpdf applies lossless optimization. Install Ghostscript for stronger image compression: <code>pkg install ghostscript</code></div>
+
+            <div class="pdf-action-row">
+              <span class="hint">The original PDF is never modified.</span>
+              <button type="button" class="btn btn-primary btn-lg" id="btnCompressRun">Compress PDF</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card pdf-result" id="compressResult" style="display:none;"></div>
+      </section>
+
+      <section class="content-panel" id="panel-split">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Extract</span>
+            <h1>Split a PDF</h1>
+            <p class="subtitle">Choose exactly which pages to keep. Enter ranges such as 1-5, 8, 10-12 and pdf-lib will write a new PDF.</p>
+          </div>
+          <span class="pdf-engine-badge"><span class="sys-dot"></span> pdf-lib</span>
+        </header>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-blue">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="6" cy="6" r="3"></circle>
+                <circle cx="6" cy="18" r="3"></circle>
+                <line x1="20" y1="4" x2="8.12" y2="15.88"></line>
+                <line x1="14.47" y1="14.48" x2="20" y2="20"></line>
+                <line x1="8.12" y1="8.12" x2="12" y2="12"></line>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>Pages to extract</h3>
+              <p>Select the source PDF, then type the pages you want in the new document.</p>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="pdf-local-only">
+              <div class="field">
+                <label class="field-label" for="splitPath">PDF file</label>
+                <div class="field-row pdf-picker-row">
+                  <input type="text" class="input" id="splitPath" placeholder="/sdcard/Download/document.pdf">
+                  <button type="button" class="btn btn-primary" id="btnSplitBrowse">Browse</button>
+                  <button type="button" class="btn btn-ghost" id="btnSplitClear">Clear</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="pdf-remote-only" style="display:none; margin-bottom:14px;">
+              <div class="upload-dropzone" data-target-input="splitPath">
+                <input type="file" class="pdf-remote-input" accept=".pdf">
+                <div class="dropzone-icon">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                </div>
+                <div class="dropzone-title">Drop PDF file here or click to browse</div>
+                <div class="dropzone-note">Select a PDF to extract pages from</div>
+                <div class="dropzone-auto-delete-tag">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                  <span>Files are auto-deleted after 30 mins</span>
+                </div>
+              </div>
+              <div id="splitUploadTimer" class="countdown-timer-box" style="display:none;"></div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="splitPages">Page range</label>
+              <input type="text" class="input mono" id="splitPages" placeholder="1-5, 8, 10-12" autocomplete="off" spellcheck="false">
+              <div class="chips chips-tight pdf-range-presets">
+                <button type="button" class="mini-shortcut" data-split-range="1-5">1-5</button>
+                <button type="button" class="mini-shortcut" data-split-range="1-5, 8, 10-12">1-5, 8, 10-12</button>
+                <button type="button" class="mini-shortcut" data-split-range="1, 3, 5">1, 3, 5</button>
+              </div>
+              <span class="hint">Use commas and hyphens. Pages are copied in the order you enter them.</span>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="splitOutDir">Output folder (optional)</label>
+              <input type="text" class="input" id="splitOutDir" placeholder="Same folder as the PDF">
+            </div>
+
+            <div class="pdf-action-row">
+              <span class="hint">The original PDF is never modified.</span>
+              <button type="button" class="btn btn-primary btn-lg" id="btnSplitRun">Extract pages</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card pdf-result" id="splitResult" style="display:none;"></div>
+      </section>
+
+      <section class="content-panel" id="panel-rotate">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Orient</span>
+            <h1>Rotate a PDF</h1>
+            <p class="subtitle">Fix sideways scans in one pass. Every page is rotated by the angle you choose.</p>
+          </div>
+          <span class="pdf-engine-badge"><span class="sys-dot"></span> pdf-lib</span>
+        </header>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-violet">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+                <polyline points="21 3 21 9 15 9"></polyline>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>PDF to rotate</h3>
+              <p>Select a PDF and choose a clockwise angle for all pages.</p>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="pdf-local-only">
+              <div class="field">
+                <label class="field-label" for="rotatePath">PDF file</label>
+                <div class="field-row pdf-picker-row">
+                  <input type="text" class="input" id="rotatePath" placeholder="/sdcard/Download/scanned.pdf">
+                  <button type="button" class="btn btn-primary" id="btnRotateBrowse">Browse</button>
+                  <button type="button" class="btn btn-ghost" id="btnRotateClear">Clear</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="pdf-remote-only" style="display:none; margin-bottom:14px;">
+              <div class="upload-dropzone" data-target-input="rotatePath">
+                <input type="file" class="pdf-remote-input" accept=".pdf">
+                <div class="dropzone-icon">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                </div>
+                <div class="dropzone-title">Drop PDF file here or click to browse</div>
+                <div class="dropzone-note">Select a PDF to rotate</div>
+                <div class="dropzone-auto-delete-tag">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                  <span>Files are auto-deleted after 30 mins</span>
+                </div>
+              </div>
+              <div id="rotateUploadTimer" class="countdown-timer-box" style="display:none;"></div>
+            </div>
+
+            <div class="field">
+              <label class="field-label">Rotation</label>
+              <div class="rotate-options" id="rotateOptions" role="group" aria-label="Rotation angle">
+                <button type="button" class="rotate-option active" data-angle="90" aria-pressed="true">
+                  <span class="rotate-angle">90°</span>
+                  <span class="rotate-desc">Clockwise</span>
+                </button>
+                <button type="button" class="rotate-option" data-angle="180" aria-pressed="false">
+                  <span class="rotate-angle">180°</span>
+                  <span class="rotate-desc">Upside down</span>
+                </button>
+                <button type="button" class="rotate-option" data-angle="270" aria-pressed="false">
+                  <span class="rotate-angle">270°</span>
+                  <span class="rotate-desc">Counter-clockwise</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="rotateOutDir">Output folder (optional)</label>
+              <input type="text" class="input" id="rotateOutDir" placeholder="Same folder as the PDF">
+            </div>
+
+            <div class="pdf-action-row">
+              <span class="hint">The original PDF is never modified.</span>
+              <button type="button" class="btn btn-primary btn-lg" id="btnRotateRun">Rotate PDF</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card pdf-result" id="rotateResult" style="display:none;"></div>
+      </section>
+
+      <section class="content-panel" id="panel-images">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Create</span>
+            <h1>Images to PDF</h1>
+            <p class="subtitle">Turn JPG and PNG images into one PDF. Each image is fitted and centered on its own A4 page with a 20pt margin.</p>
+          </div>
+          <span class="pdf-engine-badge"><span class="sys-dot"></span> pdf-lib</span>
+        </header>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-violet">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                <polyline points="21 15 16 10 5 21"></polyline>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>Images for the document</h3>
+              <p>Select one or more JPG/PNG images from phone storage.</p>
+            </div>
+            <span class="count-badge" id="imageCountBadge">0 images</span>
+          </div>
+
+          <div class="card-body">
+            <div class="notice" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="flex:0 0 auto;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+              <span>Images will be auto-scaled to fit A4 pages with equal margins (supports portrait &amp; landscape).</span>
+            </div>
+
+            <div class="pdf-local-only">
+              <div class="field">
+                <label class="field-label" for="imagePathInput">Add an image by path</label>
+                <div class="field-row pdf-picker-row">
+                  <input type="text" class="input" id="imagePathInput" placeholder="/sdcard/DCIM/Camera/photo.jpg">
+                  <button type="button" class="btn btn-secondary" id="btnImageAddPath">Add path</button>
+                  <button type="button" class="btn btn-primary" id="btnImageBrowse">Browse images</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="pdf-remote-only" style="display:none; margin-bottom:14px;">
+              <div class="upload-dropzone" data-target-input="images">
+                <input type="file" class="pdf-remote-input" accept="image/*,.jpg,.jpeg,.png" multiple>
+                <div class="dropzone-icon">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                </div>
+                <div class="dropzone-title">Drop images here or click to browse</div>
+                <div class="dropzone-note">Max 2GB per upload · JPG, PNG (select multiple)</div>
+                <div class="dropzone-auto-delete-tag">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                  <span>Files are auto-deleted after 30 mins</span>
+                </div>
+              </div>
+              <div id="imagesUploadTimer" class="countdown-timer-box" style="display:none;"></div>
+            </div>
+
+            <div class="file-stack image-stack" id="imageList">
+              <div class="file-stack-empty">No images selected yet. Add at least one JPG or PNG.</div>
+            </div>
+
+            <div class="field pdf-spaced-top">
+              <label class="field-label" for="imageOutDir">Output folder (optional)</label>
+              <input type="text" class="input" id="imageOutDir" placeholder="Same folder as the first image">
+            </div>
+
+            <div class="pdf-action-row">
+              <span class="hint">Images will be auto-scaled to fit A4 pages. Use the arrows to set page order.</span>
+              <button type="button" class="btn btn-primary btn-lg" id="btnImagesRun">Create PDF</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card pdf-result" id="imagesResult" style="display:none;"></div>
+      </section>
+
+      <section class="content-panel" id="panel-toimages">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <span class="eyebrow">Export</span>
+            <h1>PDF to Images</h1>
+            <p class="subtitle">Render PDF pages as JPG files with poppler's pdftoppm. Choose a DPI and optional page range.</p>
+          </div>
+          <span class="pdf-engine-badge"><span class="sys-dot"></span> pdftoppm</span>
+        </header>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-icon tone-teal">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="7" height="7" rx="1"></rect>
+                <rect x="14" y="3" width="7" height="7" rx="1"></rect>
+                <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+                <rect x="14" y="14" width="7" height="7" rx="1"></rect>
+              </svg>
+            </span>
+            <div class="card-head-text">
+              <h3>PDF to export</h3>
+              <p>Each page is written as a separate JPG in a new folder.</p>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="pdf-local-only">
+              <div class="field">
+                <label class="field-label" for="toImagesPath">PDF file</label>
+                <div class="field-row pdf-picker-row">
+                  <input type="text" class="input" id="toImagesPath" placeholder="/sdcard/Download/document.pdf">
+                  <button type="button" class="btn btn-primary" id="btnToImagesBrowse">Browse</button>
+                  <button type="button" class="btn btn-ghost" id="btnToImagesClear">Clear</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="pdf-remote-only" style="display:none; margin-bottom:14px;">
+              <div class="upload-dropzone" data-target-input="toImagesPath">
+                <input type="file" class="pdf-remote-input" accept=".pdf">
+                <div class="dropzone-icon">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                </div>
+                <div class="dropzone-title">Drop PDF file here or click to browse</div>
+                <div class="dropzone-note">Select a PDF to render into images</div>
+                <div class="dropzone-auto-delete-tag">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                  <span>Files are auto-deleted after 30 mins</span>
+                </div>
+              </div>
+              <div id="toImagesUploadTimer" class="countdown-timer-box" style="display:none;"></div>
+            </div>
+
+            <div class="grid-2 pdf-options-grid">
+              <div class="field">
+                <label class="field-label" for="toImagesDpi">Resolution</label>
+                <select class="input" id="toImagesDpi">
+                  <option value="72">72 DPI · small</option>
+                  <option value="150" selected>150 DPI · balanced</option>
+                  <option value="300">300 DPI · sharp</option>
+                  <option value="450">450 DPI · print</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="field-label" for="toImagesOutDir">Output folder (optional)</label>
+                <input type="text" class="input" id="toImagesOutDir" placeholder="Same folder as the PDF">
+              </div>
+            </div>
+
+            <div class="grid-2 pdf-options-grid">
+              <div class="field">
+                <label class="field-label" for="toImagesFirst">First page (optional)</label>
+                <input type="number" class="input" id="toImagesFirst" min="1" placeholder="All pages">
+              </div>
+              <div class="field">
+                <label class="field-label" for="toImagesLast">Last page (optional)</label>
+                <input type="number" class="input" id="toImagesLast" min="1" placeholder="Last page">
+              </div>
+            </div>
+
+            <div class="pdf-action-row">
+              <span class="hint">A new image folder is created for every export.</span>
+              <button type="button" class="btn btn-primary btn-lg" id="btnToImagesRun">Export JPGs</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card pdf-result" id="toImagesResult" style="display:none;"></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-overlay" id="pdfExplorerModal" style="display:none;">
+    <div class="modal modal-lg">
+      <div class="modal-head">
+        <h3 id="pdfExplorerTitle">Select a file</h3>
+        <button class="btn-icon-close" id="btnPdfExplorerClose" type="button" aria-label="Close">✕</button>
+      </div>
+
+      <div class="explorer-toolbar">
+        <div class="toolbar-buttons">
+          <button type="button" class="btn btn-ghost btn-sm" id="btnPdfExplorerUp" title="Parent folder">↑ Up</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnPdfExplorerRefresh" title="Refresh">⟳</button>
+        </div>
+        <div class="breadcrumbs" id="pdfExplorerBreadcrumbs">
+          <span class="crumb active">/sdcard</span>
+        </div>
+      </div>
+
+      <div class="chips chips-tight">
+        <button type="button" class="mini-shortcut" data-path="/sdcard">Internal</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/Download">Downloads</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/Documents">Documents</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/DCIM">DCIM</button>
+        <button type="button" class="mini-shortcut" data-path="/sdcard/Pictures">Pictures</button>
+      </div>
+
+      <div class="search-bar">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="pdfExplorerSearch" placeholder="Filter files…">
+        <button type="button" id="btnPdfExplorerClearSearch" class="search-clear" style="display:none;">✕</button>
+      </div>
+
+      <div class="explorer-body">
+        <div id="pdfExplorerLoading" class="explorer-loading" style="display:none;">
+          <span class="spinner"></span>
+          <span>Reading storage…</span>
+        </div>
+        <div id="pdfExplorerError" class="banner banner-warning" style="display:none;"></div>
+        <div id="pdfExplorerList" class="explorer-list"></div>
+      </div>
+
+      <div class="modal-foot">
+        <span class="hint" id="pdfExplorerHint">Tap a folder to open it.</span>
+        <div class="actions-row pdf-explorer-foot-actions">
+          <button type="button" class="btn btn-secondary" id="btnPdfExplorerCancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="btnPdfExplorerConfirm" style="display:none;">Select</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="/pdf.js"></script>
+</body>
+</html>

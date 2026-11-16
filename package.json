@@ -1,0 +1,31 @@
+{
+  "name": "termux-ffmpeg-studio",
+  "version": "1.0.0",
+  "description": "Production-ready web-based FFmpeg tool running natively on Termux localhost",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "termux",
+    "ffmpeg",
+    "web-studio",
+    "video-converter",
+    "media-editor"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@img/sharp-wasm32": "^0.35.5",
+    "body-parser": "^1.20.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "express-fileupload": "^1.6.0",
+    "express-session": "^1.19.0",
+    "morgan": "^1.10.0",
+    "multer": "^2.5.0",
+    "pdf-lib": "^1.17.1",
+    "sharp": "^0.35.5"
+  }
+}
