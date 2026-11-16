@@ -111,6 +111,30 @@ let mediaUploadCountdownTimer = null;
 let mediaOutputCountdownTimer = null;
 let allExplorerItems = [];
 
+function isMediaRemoteMode() {
+  return Boolean(btnMediaModeRemote && btnMediaModeRemote.classList.contains('active'));
+}
+
+function initMediaUploadTimer() {
+  if (!mediaUploadCountdownTimer) {
+    mediaUploadCountdownTimer = new AutoCleanupTimer(mediaUploadTimer, 'ffstudio_media_upload_timer', () => {
+      showToast('Uploaded file expired (30-minute limit).', 'warning');
+      clearSelectedMedia();
+    });
+  }
+  return mediaUploadCountdownTimer;
+}
+
+function initMediaOutputTimer() {
+  if (!mediaOutputCountdownTimer) {
+    mediaOutputCountdownTimer = new AutoCleanupTimer(mediaOutputTimer, 'ffstudio_media_output_timer', () => {
+      showToast('Output file expired (30-minute limit).', 'warning');
+      if (btnProminentDownload) btnProminentDownload.style.display = 'none';
+    });
+  }
+  return mediaOutputCountdownTimer;
+}
+
 // ======================== AUTO-CLEANUP TIMER & SESSION HELPERS ========================
 class AutoCleanupTimer {
   constructor(element, storageKey, onExpire) {
@@ -392,16 +416,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function setupStorageModeAndUpload() {
-  mediaUploadCountdownTimer = new AutoCleanupTimer(mediaUploadTimer, 'ffstudio_media_upload_timer', () => {
-    showToast('Uploaded file expired (30-minute limit).', 'warning');
-    clearSelectedMedia();
-  });
-
-  mediaOutputCountdownTimer = new AutoCleanupTimer(mediaOutputTimer, 'ffstudio_media_output_timer', () => {
-    showToast('Output file expired (30-minute limit).', 'warning');
-    if (btnProminentDownload) btnProminentDownload.style.display = 'none';
-  });
-
   // Mode Toggle logic
   function setMode(mode) {
     if (isConversionRunning) {
@@ -414,12 +428,29 @@ function setupStorageModeAndUpload() {
       if (mediaLocalSection) mediaLocalSection.style.display = 'none';
       if (mediaRemoteSection) mediaRemoteSection.style.display = 'block';
       localStorage.setItem('ffstudio_media_mode', 'remote');
+      initMediaUploadTimer().recover();
+      initMediaOutputTimer().recover();
     } else {
       if (btnMediaModeRemote) btnMediaModeRemote.classList.remove('active');
       if (btnMediaModeLocal) btnMediaModeLocal.classList.add('active');
       if (mediaRemoteSection) mediaRemoteSection.style.display = 'none';
       if (mediaLocalSection) mediaLocalSection.style.display = 'block';
       localStorage.setItem('ffstudio_media_mode', 'local');
+      if (mediaUploadCountdownTimer) {
+        mediaUploadCountdownTimer.clear();
+        mediaUploadCountdownTimer = null;
+      }
+      if (mediaOutputCountdownTimer) {
+        mediaOutputCountdownTimer.clear();
+        mediaOutputCountdownTimer = null;
+      }
+      if (mediaOutputTimer) {
+        mediaOutputTimer.style.display = 'none';
+        mediaOutputTimer.innerHTML = '';
+      }
+      try {
+        localStorage.removeItem('ffstudio_media_output_timer');
+      } catch (e) {}
     }
 
     // Reset selected media and form inputs on mode switch
@@ -439,10 +470,6 @@ function setupStorageModeAndUpload() {
   const savedMode = localStorage.getItem('ffstudio_media_mode') || 'local';
   setMode(savedMode);
 
-  // Recover timers if present
-  mediaUploadCountdownTimer.recover();
-  mediaOutputCountdownTimer.recover();
-
   // Manual Reset / Clear Session Handler
   const btnClearMediaSession = document.getElementById('btnClearMediaSession');
   if (btnClearMediaSession) {
@@ -452,8 +479,10 @@ function setupStorageModeAndUpload() {
         return;
       }
       if (confirm('Reset your remote session? This clears your temporary session key and reset timers.')) {
-        mediaUploadCountdownTimer.clear();
-        mediaOutputCountdownTimer.clear();
+        if (mediaUploadCountdownTimer) mediaUploadCountdownTimer.clear();
+        if (mediaOutputCountdownTimer) mediaOutputCountdownTimer.clear();
+        mediaUploadCountdownTimer = null;
+        mediaOutputCountdownTimer = null;
         clearSelectedMedia();
         try {
           localStorage.removeItem('ffstudio_session_id');
@@ -479,11 +508,6 @@ function setupStorageModeAndUpload() {
     const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
     if (!ALLOWED_MEDIA.has(ext)) {
       showToast(`Unsupported media format (${ext || 'unknown'}). Please upload a video or audio file (.mp4, .mkv, .mp3, etc.).`, 'error');
-      return;
-    }
-
-    if (file.size > 2 * 1024 * 1024 * 1024) {
-      showToast('File size exceeds the 2GB limit.', 'error');
       return;
     }
 
@@ -653,22 +677,38 @@ function updateProgressStats({ progress, currentTime, totalDuration, speed, file
   }
 }
 
-// Polling fallback mechanism: polls /api/current-job every 2 seconds if EventSource fails
+// Polling fallback mechanism: polls /api/current-job with recursive setTimeout if EventSource fails
+let jobPollingTimeout = null;
+let isPollingFallbackActive = false;
+
 function startPollingFallback() {
-  if (jobPollingInterval) return;
+  if (isPollingFallbackActive) return;
+  isPollingFallbackActive = true;
   console.log('[SSE Fallback] Starting HTTP polling for /api/current-job every 2s');
-  pollCurrentJob();
-  jobPollingInterval = setInterval(() => {
-    pollCurrentJob();
-  }, 2000);
+
+  const executePoll = () => {
+    if (!isPollingFallbackActive) return;
+    pollCurrentJob().finally(() => {
+      if (isPollingFallbackActive) {
+        jobPollingTimeout = setTimeout(executePoll, 2000);
+      }
+    });
+  };
+
+  executePoll();
 }
 
 function stopPollingFallback() {
+  isPollingFallbackActive = false;
+  if (jobPollingTimeout) {
+    clearTimeout(jobPollingTimeout);
+    jobPollingTimeout = null;
+  }
   if (jobPollingInterval) {
     clearInterval(jobPollingInterval);
     jobPollingInterval = null;
-    console.log('[SSE Fallback] HTTP polling stopped');
   }
+  console.log('[SSE Fallback] HTTP polling stopped');
 }
 
 async function pollCurrentJob() {
@@ -2846,10 +2886,24 @@ function handleJobCompleted(data) {
       btnDownloadOutput.style.display = 'inline-flex';
     }
 
-    // Start 30-minute countdown timer on mediaOutputTimer
-    if (mediaOutputCountdownTimer) {
+    // Start 30-minute countdown timer on mediaOutputTimer ONLY for Remote Upload (WAN) mode
+    const isRemote = isMediaRemoteMode() || Boolean(file.isRemoteUpload);
+    if (isRemote) {
+      const outTimer = initMediaOutputTimer();
       const expiresAt = file.expiresAt || (Date.now() + 30 * 60 * 1000);
-      mediaOutputCountdownTimer.start(expiresAt, 'Output file will be deleted in');
+      outTimer.start(expiresAt, 'Output file will be deleted in');
+    } else {
+      if (mediaOutputCountdownTimer) {
+        mediaOutputCountdownTimer.clear();
+        mediaOutputCountdownTimer = null;
+      }
+      if (mediaOutputTimer) {
+        mediaOutputTimer.style.display = 'none';
+        mediaOutputTimer.innerHTML = '';
+      }
+      try {
+        localStorage.removeItem('ffstudio_media_output_timer');
+      } catch (e) {}
     }
 
     showToast(`File saved successfully at ${file.path}`, 'success');

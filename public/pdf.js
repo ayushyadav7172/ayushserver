@@ -249,10 +249,16 @@
       $('btnPdfModeLocal')?.classList.remove('active');
       $('btnPdfModeRemote')?.classList.add('active');
       localStorage.setItem('ffstudio_pdf_mode', 'remote');
+      initPdfUploadTimers();
+      Object.values(pdfTimers).forEach((timer) => timer.recover());
     } else {
       $('btnPdfModeRemote')?.classList.remove('active');
       $('btnPdfModeLocal')?.classList.add('active');
       localStorage.setItem('ffstudio_pdf_mode', 'local');
+      Object.values(pdfTimers).forEach((timer) => timer.clear());
+      for (const k of Object.keys(pdfTimers)) {
+        delete pdfTimers[k];
+      }
     }
     document.querySelectorAll('.pdf-local-only').forEach((el) => {
       el.style.display = isRemote ? 'none' : '';
@@ -323,12 +329,6 @@
       showToast(`${fileList.length - valid.length} invalid file(s) were skipped.`, 'warning');
     }
 
-    const totalBytes = valid.reduce((acc, f) => acc + f.size, 0);
-    if (totalBytes > 2 * 1024 * 1024 * 1024) {
-      showToast('Total upload size exceeds 2GB limit.', 'error');
-      return;
-    }
-
     const titleEl = dropzone.querySelector('.dropzone-title');
     const originalTitle = titleEl ? titleEl.textContent : '';
     if (titleEl) titleEl.textContent = `Uploading ${valid.length} file${valid.length === 1 ? '' : 's'} (0%)...`;
@@ -389,38 +389,52 @@
     xhr.send(formData);
   }
 
+  function initPdfUploadTimers() {
+    if (!pdfTimers.unlock) {
+      pdfTimers.unlock = new AutoCleanupTimer('unlockUploadTimer', 'ffstudio_pdf_timer_unlock', () => {
+        const el = $('unlockPath');
+        if (el) el.value = '';
+      });
+    }
+    if (!pdfTimers.merge) {
+      pdfTimers.merge = new AutoCleanupTimer('mergeUploadTimer', 'ffstudio_pdf_timer_merge', () => {
+        mergePaths.length = 0;
+        renderMergeList();
+      });
+    }
+    if (!pdfTimers.compress) {
+      pdfTimers.compress = new AutoCleanupTimer('compressUploadTimer', 'ffstudio_pdf_timer_compress', () => {
+        const el = $('compressPath');
+        if (el) el.value = '';
+      });
+    }
+    if (!pdfTimers.split) {
+      pdfTimers.split = new AutoCleanupTimer('splitUploadTimer', 'ffstudio_pdf_timer_split', () => {
+        const el = $('splitPath');
+        if (el) el.value = '';
+      });
+    }
+    if (!pdfTimers.rotate) {
+      pdfTimers.rotate = new AutoCleanupTimer('rotateUploadTimer', 'ffstudio_pdf_timer_rotate', () => {
+        const el = $('rotatePath');
+        if (el) el.value = '';
+      });
+    }
+    if (!pdfTimers.images) {
+      pdfTimers.images = new AutoCleanupTimer('imagesUploadTimer', 'ffstudio_pdf_timer_images', () => {
+        imagePaths.length = 0;
+        renderImageList();
+      });
+    }
+    if (!pdfTimers.toimages) {
+      pdfTimers.toimages = new AutoCleanupTimer('toImagesUploadTimer', 'ffstudio_pdf_timer_toimages', () => {
+        const el = $('toImagesPath');
+        if (el) el.value = '';
+      });
+    }
+  }
+
   function initPdfStorageModeAndUploads() {
-    pdfTimers.unlock = new AutoCleanupTimer('unlockUploadTimer', 'ffstudio_pdf_timer_unlock', () => {
-      const el = $('unlockPath');
-      if (el) el.value = '';
-    });
-    pdfTimers.merge = new AutoCleanupTimer('mergeUploadTimer', 'ffstudio_pdf_timer_merge', () => {
-      mergePaths.length = 0;
-      renderMergeList();
-    });
-    pdfTimers.compress = new AutoCleanupTimer('compressUploadTimer', 'ffstudio_pdf_timer_compress', () => {
-      const el = $('compressPath');
-      if (el) el.value = '';
-    });
-    pdfTimers.split = new AutoCleanupTimer('splitUploadTimer', 'ffstudio_pdf_timer_split', () => {
-      const el = $('splitPath');
-      if (el) el.value = '';
-    });
-    pdfTimers.rotate = new AutoCleanupTimer('rotateUploadTimer', 'ffstudio_pdf_timer_rotate', () => {
-      const el = $('rotatePath');
-      if (el) el.value = '';
-    });
-    pdfTimers.images = new AutoCleanupTimer('imagesUploadTimer', 'ffstudio_pdf_timer_images', () => {
-      imagePaths.length = 0;
-      renderImageList();
-    });
-    pdfTimers.toimages = new AutoCleanupTimer('toImagesUploadTimer', 'ffstudio_pdf_timer_toimages', () => {
-      const el = $('toImagesPath');
-      if (el) el.value = '';
-    });
-
-    Object.values(pdfTimers).forEach((timer) => timer.recover());
-
     $('btnPdfModeLocal')?.addEventListener('click', () => setPdfStorageMode('local'));
     $('btnPdfModeRemote')?.addEventListener('click', () => setPdfStorageMode('remote'));
 
@@ -573,6 +587,14 @@
         const expiresAt = Date.now() + 30 * 60 * 1000;
         const outTimer = new AutoCleanupTimer(timerBox, 'ffstudio_pdf_output_toimages');
         outTimer.start(expiresAt, 'Exported files will be deleted in');
+      } else {
+        const localNotice = document.createElement('div');
+        localNotice.className = 'banner banner-success';
+        localNotice.style.fontSize = '12px';
+        localNotice.style.padding = '8px 12px';
+        localNotice.style.marginBottom = '12px';
+        localNotice.textContent = 'Saved directly to device storage';
+        shell.body.appendChild(localNotice);
       }
 
       const note = document.createElement('p');
@@ -628,6 +650,14 @@
         data.expiresAt = expiresAt;
         const outTimer = new AutoCleanupTimer(timerBox, 'ffstudio_pdf_output_' + (container.id || 'single'));
         outTimer.start(expiresAt, 'Output file will be deleted in');
+      } else {
+        const localNotice = document.createElement('div');
+        localNotice.className = 'banner banner-success';
+        localNotice.style.fontSize = '12px';
+        localNotice.style.padding = '8px 12px';
+        localNotice.style.marginBottom = '12px';
+        localNotice.textContent = 'Saved directly to device storage';
+        shell.body.appendChild(localNotice);
       }
 
       const actions = resultActions();

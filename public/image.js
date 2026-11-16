@@ -795,20 +795,34 @@
     });
 
     if (successCount > 0) {
-      const expiresAt = data.expiresAt || (Date.now() + 30 * 60 * 1000);
-      data.expiresAt = expiresAt;
-      try {
-        localStorage.setItem('ffstudio_image_last_result', JSON.stringify({
-          data,
-          expiresAt
-        }));
-      } catch (e) {}
+      if (isImageRemoteMode()) {
+        const expiresAt = data.expiresAt || (Date.now() + 30 * 60 * 1000);
+        data.expiresAt = expiresAt;
+        try {
+          localStorage.setItem('ffstudio_image_last_result', JSON.stringify({
+            data,
+            expiresAt
+          }));
+        } catch (e) {}
 
-      const timerBox = document.createElement('div');
-      timerBox.className = 'countdown-timer-box';
-      shell.body.appendChild(timerBox);
-      const outTimer = new AutoCleanupTimer(timerBox, 'ffstudio_image_output_timer');
-      outTimer.start(expiresAt, 'Output file(s) will be deleted in');
+        const timerBox = document.createElement('div');
+        timerBox.className = 'countdown-timer-box';
+        shell.body.appendChild(timerBox);
+        const outTimer = new AutoCleanupTimer(timerBox, 'ffstudio_image_output_timer');
+        outTimer.start(expiresAt, 'Output file(s) will be deleted in');
+      } else {
+        try {
+          localStorage.removeItem('ffstudio_image_output_timer');
+          localStorage.removeItem('ffstudio_image_last_result');
+        } catch (e) {}
+        const localNotice = document.createElement('div');
+        localNotice.className = 'banner banner-success';
+        localNotice.style.fontSize = '12px';
+        localNotice.style.padding = '8px 12px';
+        localNotice.style.marginBottom = '12px';
+        localNotice.textContent = 'Saved directly to device storage';
+        shell.body.appendChild(localNotice);
+      }
     }
 
     const summary = data.summary || {};
@@ -1474,13 +1488,18 @@
   let imageUploadCountdownTimer = null;
 
   function bindStorageModeAndUpload() {
-    imageUploadCountdownTimer = new AutoCleanupTimer('imageUploadTimer', 'ffstudio_image_upload_timer', () => {
-      showToast('Uploaded images expired (30-minute limit).', 'warning');
-      state.paths = [];
-      state.info.clear();
-      state.activePath = null;
-      renderQueue();
-    });
+    function ensureImageUploadTimer() {
+      if (!imageUploadCountdownTimer) {
+        imageUploadCountdownTimer = new AutoCleanupTimer('imageUploadTimer', 'ffstudio_image_upload_timer', () => {
+          showToast('Uploaded images expired (30-minute limit).', 'warning');
+          state.paths = [];
+          state.info.clear();
+          state.activePath = null;
+          renderQueue();
+        });
+      }
+      return imageUploadCountdownTimer;
+    }
 
     function setMode(mode) {
       if (state.busy) {
@@ -1493,12 +1512,20 @@
         if ($('imageLocalSection')) $('imageLocalSection').style.display = 'none';
         if ($('imageRemoteSection')) $('imageRemoteSection').style.display = 'block';
         localStorage.setItem('ffstudio_image_mode', 'remote');
+        ensureImageUploadTimer().recover();
       } else {
         $('btnImageModeRemote')?.classList.remove('active');
         $('btnImageModeLocal')?.classList.add('active');
         if ($('imageRemoteSection')) $('imageRemoteSection').style.display = 'none';
         if ($('imageLocalSection')) $('imageLocalSection').style.display = 'block';
         localStorage.setItem('ffstudio_image_mode', 'local');
+        if (imageUploadCountdownTimer) {
+          imageUploadCountdownTimer.clear();
+          imageUploadCountdownTimer = null;
+        }
+        try {
+          localStorage.removeItem('ffstudio_image_output_timer');
+        } catch (e) {}
       }
       // Reset active queues and paths to prevent cross-mode accidental processing
       state.paths = [];
@@ -1529,7 +1556,10 @@
         state.info.clear();
         state.activePath = null;
         renderQueue();
-        if (imageUploadCountdownTimer) imageUploadCountdownTimer.clear();
+        if (imageUploadCountdownTimer) {
+          imageUploadCountdownTimer.clear();
+          imageUploadCountdownTimer = null;
+        }
         const res = $('imageResult');
         if (res) res.innerHTML = '';
         showToast('Image session reset successfully.', 'info');
@@ -1538,8 +1568,6 @@
 
     const savedMode = localStorage.getItem('ffstudio_image_mode') || 'local';
     setMode(savedMode);
-
-    imageUploadCountdownTimer.recover();
 
     function uploadImages(files) {
       if (state.busy) {
@@ -1555,12 +1583,6 @@
       }
       if (valid.length < fileList.length) {
         showToast(`Skipped ${fileList.length - valid.length} invalid file(s). Only images are supported.`, 'warning');
-      }
-
-      const totalBytes = valid.reduce((acc, f) => acc + f.size, 0);
-      if (totalBytes > 2 * 1024 * 1024 * 1024) {
-        showToast('Total upload size exceeds 2GB limit.', 'error');
-        return;
       }
 
       const progressWrap = $('imageUploadProgress');
@@ -1668,6 +1690,7 @@
 
   function recoverImageLastResult() {
     try {
+      if (!isImageRemoteMode()) return;
       const raw = localStorage.getItem('ffstudio_image_last_result');
       if (!raw) return;
       const item = JSON.parse(raw);

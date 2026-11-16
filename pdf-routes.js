@@ -101,7 +101,7 @@ function createPdfRouter(deps) {
     createParentPath: true,
     abortOnLimit: true,
     limits: {
-      fileSize: MAX_UPLOAD_BYTES,
+      fileSize: Infinity,
       files: MAX_IMAGES,
       fields: 100
     }
@@ -329,53 +329,86 @@ function createPdfRouter(deps) {
       UPLOAD_TEMP_DIR,
       `${Date.now()}_${crypto.randomBytes(6).toString('hex')}${ext}`
     );
-    await fs.promises.writeFile(tempPath, Buffer.from(file.data));
+    try {
+      await fs.promises.writeFile(tempPath, Buffer.from(file.data));
+    } catch (writeErr) {
+      if (writeErr.code === 'ENOSPC' || (writeErr.message && writeErr.message.includes('ENOSPC'))) {
+        throw createHttpError(507, 'Upload failed: Not enough storage space on the server.');
+      }
+      throw writeErr;
+    }
     file._createdTempPath = tempPath;
+    file.data = null; // GC hint: free uploaded in-memory buffer after persisting to disk
     return tempPath;
   }
 
   function runCommand(command, args, label, timeoutMs = 180000, req = null) {
     return new Promise((resolve, reject) => {
-      let child;
-      let cleanupListener = null;
-
       try {
-        child = execFile(command, args, {
-          timeout: timeoutMs,
-          maxBuffer: 20 * 1024 * 1024,
+        const child = spawn(command, args, {
           windowsHide: true
-        }, (err, stdout, stderr) => {
-          if (cleanupListener && req && req.res) {
-            req.res.off('close', cleanupListener);
-          }
+        });
 
-          if (!err) {
-            return resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') });
+        let stdout = '';
+        let stderr = '';
+        let isDone = false;
+
+        if (child.stdout) {
+          child.stdout.on('data', (d) => { stdout += d; });
+        }
+        if (child.stderr) {
+          child.stderr.on('data', (d) => { stderr += d; });
+        }
+
+        const timeout = setTimeout(() => {
+          try { child.kill('SIGKILL'); } catch (e) {}
+          reject(createHttpError(504, `${label} timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
+        }, timeoutMs);
+
+        const res = req && (req.res || (req.writableEnded !== undefined ? req : null));
+        const abortHandler = () => {
+          const resEnded = req && req.res ? req.res.writableEnded : (res ? res.writableEnded : false);
+          if (!isDone && !resEnded && child && !child.killed) {
+            try { child.kill('SIGKILL'); } catch (e) {}
           }
+        };
+
+        if (res) {
+          res.once('close', abortHandler);
+        }
+
+        child.on('error', (err) => {
+          if (isDone) return;
+          isDone = true;
+          clearTimeout(timeout);
+          if (res) res.off('close', abortHandler);
 
           if (err.code === 'ENOENT') {
             const packageName = PACKAGE_BY_COMMAND[command] || command;
             return reject(createHttpError(503, `${command} is not installed. Run: pkg install ${packageName}`));
           }
+          return reject(createHttpError(500, `${label} could not be started: ${err.message}`));
+        });
 
-          if (isMemoryFailure(err)) {
+        child.on('close', (code) => {
+          if (isDone) return;
+          isDone = true;
+          clearTimeout(timeout);
+          if (res) res.off('close', abortHandler);
+
+          if (code === 0) {
+            return resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') });
+          }
+
+          if (isMemoryFailure({ message: stderr })) {
             return reject(createHttpError(413, `${label} ran out of memory. Try a smaller PDF or lower settings.`));
           }
 
           const lines = String(stderr || '').trim().split('\n').map((line) => line.trim()).filter(Boolean);
-          const detail = lines.length > 0 ? lines[lines.length - 1] : err.message;
+          const detail = lines.length > 0 ? lines[lines.length - 1] : `Process exited with code ${code}`;
           const invalidPassword = /password/i.test(detail);
           return reject(createHttpError(invalidPassword ? 400 : 500, `${label} failed: ${detail}`));
         });
-
-        if (req && req.res) {
-          cleanupListener = () => {
-            if (!req.res.writableEnded && child && !child.killed) {
-              try { child.kill('SIGKILL'); } catch (e) {}
-            }
-          };
-          req.res.once('close', cleanupListener);
-        }
       } catch (spawnErr) {
         return reject(createHttpError(500, `${label} could not be started: ${spawnErr.message}`));
       }
@@ -850,19 +883,27 @@ function createPdfRouter(deps) {
       for (const source of sources) {
         let bytes = await readSource(source);
         let pdf = null;
+        let pages = null;
         try {
           pdf = await loadPdfDocument(bytes, sourceLabel(source));
+          // GC hint: free the raw file bytes immediately now that pdf-lib has loaded the document
+          bytes = null;
+
           totalMergedPages += pdf.getPageCount();
           if (totalMergedPages > MAX_MERGE_PAGES) {
             throw createHttpError(413, `The PDFs contain more than ${MAX_MERGE_PAGES} pages in total. Merge fewer documents.`);
           }
-          const pages = await merged.copyPages(pdf, pdf.getPageIndices());
+          pages = await merged.copyPages(pdf, pdf.getPageIndices());
           for (const page of pages) {
             merged.addPage(page);
           }
         } finally {
           bytes = null;
-          pdf = null;
+          pages = null;
+          pdf = null; // GC hint: immediately destroy/free source PDF document from memory
+          if (global.gc) {
+            try { global.gc(); } catch (e) {}
+          }
         }
       }
 
@@ -880,6 +921,9 @@ function createPdfRouter(deps) {
       throw err;
     } finally {
       merged = null;
+      if (global.gc) {
+        try { global.gc(); } catch (e) {}
+      }
     }
 
     res.json({
@@ -1397,6 +1441,9 @@ function createPdfRouter(deps) {
   router.use((err, req, res, next) => {
     cleanupUploads(req);
     if (res.headersSent) return next(err);
+    if (err.code === 'ENOSPC' || (err.message && err.message.includes('ENOSPC'))) {
+      return res.status(507).json({ success: false, error: 'Upload failed: Not enough storage space on the server.' });
+    }
     const status = err.status || (err.name === 'AbortError' ? 413 : 500);
     const message = err.status ? err.message : `PDF operation failed: ${err.message}`;
     res.status(status).json({ success: false, error: message });

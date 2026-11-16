@@ -149,8 +149,8 @@ app.use(session({
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
-app.use(bodyParser.json({ limit: '50mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: Infinity }));
+app.use(express.urlencoded({ limit: Infinity, extended: true }));
 app.use(express.static(PUBLIC_DIR, { index: false }));
 
 app.get('/', (req, res) => {
@@ -511,7 +511,7 @@ const uploadStorage = multer.diskStorage({
 
 const uploadMiddleware = multer({
   storage: uploadStorage,
-  limits: { fileSize: 2 * 1024 * 1024 * 1024 } // 2GB limit to prevent server crashes
+  limits: { fileSize: Infinity } // Completely remove file upload size restrictions
 });
 
 // Helper: Format bytes
@@ -1004,19 +1004,51 @@ function extractFilterFileReferences(filterExpr) {
   const refs = [];
   if (typeof filterExpr !== 'string' || !filterExpr) return refs;
 
-  const valuePattern = /(?:filename|movie|amovie|subtitles|subfile)\s*=\s*(?:'([^']*)'|"([^"]*)"|([^,;\[\]\s]+))/gi;
+  const reservedKeys = new Set([
+    'filename', 'file', 'fontfile', 'textfile', 'psfile', 'subfile',
+    'model', 'f', 'format', 'si', 'force_style', 'charenc', 'stream_index'
+  ]);
+
+  const cleanRef = (val) => {
+    if (!val || typeof val !== 'string') return null;
+    let s = val.trim();
+    // Strip surrounding quotes (regular quotes or backslash-escaped quotes)
+    s = s.replace(/^(\\?['"])(.*)\1$/, '$2');
+    s = s.replace(/^['"]|['"]$/g, '');
+    // Unescape backslash-escaped characters in FFmpeg filter syntax (e.g. \:, \', \\, \[, \], \,, \;)
+    s = s.replace(/\\([:,'"\\[\];])/g, '$1');
+    s = s.trim();
+    // Exclude reserved filter keys, flags, or purely numeric/empty values
+    if (!s || s === '-' || reservedKeys.has(s.toLowerCase()) || /^[0-9]+(?:\.[0-9]+)?$/.test(s)) return null;
+    return s;
+  };
+
+  // 1. Explicit key=value pairs for file parameters in FFmpeg filters
+  // Matches key=(quoted string OR unquoted token allowing escaped chars)
+  const keyPattern = /(?:filename|file|fontfile|textfile|psfile|subfile|movie|amovie|subtitles|ass|lut3d|model|f)\s*=\s*(?:'([^']*)'|"([^"]*)"|((?:\\.|[^\s,;:=|\[\]'"])+))/gi;
   let match;
-  while ((match = valuePattern.exec(filterExpr)) !== null) {
-    if (match[1] || match[2] || match[3]) refs.push(match[1] || match[2] || match[3]);
+  while ((match = keyPattern.exec(filterExpr)) !== null) {
+    const rawVal = match[1] || match[2] || match[3];
+    const cleaned = cleanRef(rawVal);
+    if (cleaned) refs.push(cleaned);
   }
 
-  // Catch absolute path-looking assignments without a filename= prefix.
-  const absPattern = /(?:^|[=\s'",;:])((?:\/|file:)[^\s,;\[\]'"]+)/g;
-  while ((match = absPattern.exec(filterExpr)) !== null) {
-    if (match[1]) refs.push(match[1]);
+  // 2. Catch file paths: absolute (/), file: URIs, relative (./, ../), or Windows drive (C:/, C:\)
+  // Allows escaped colons/chars like \: within the path
+  const pathPattern = /(?:^|[=\s'",;:\[\]])((?:file:|\/|\.\.?\/|[a-zA-Z]:[\\\/])(?:\\.|[^\s,;:|\[\]'"])+)/g;
+  while ((match = pathPattern.exec(filterExpr)) !== null) {
+    const cleaned = cleanRef(match[1]);
+    if (cleaned) refs.push(cleaned);
   }
 
-  return Array.from(new Set(refs));
+  // 3. Catch file references by common media/data extensions
+  const extPattern = /(?:^|[=\s'",;:\[\]])((?:\\.|[^\s,;:=|\[\]'"])+\.(?:srt|ass|ssa|vtt|sub|idx|ttf|otf|ttc|woff|woff2|png|jpg|jpeg|webp|gif|bmp|mp4|mkv|avi|mov|webm|flv|ts|mp3|wav|flac|aac|ogg|m4a|cube|acv|txt|json|conf|log))(?=[=\s'",;:\[\]]|$)/gi;
+  while ((match = extPattern.exec(filterExpr)) !== null) {
+    const cleaned = cleanRef(match[1]);
+    if (cleaned) refs.push(cleaned);
+  }
+
+  return Array.from(new Set(refs.filter(Boolean)));
 }
 
 const CUSTOM_PATH_VALUE_OPTIONS = new Set(['-i', '-filter_script', '-attach']);
@@ -2983,7 +3015,7 @@ app.get('/api/current-job', (req, res) => {
 });
 
 // ======================== REMOTE UPLOAD & DOWNLOAD ENDPOINTS ========================
-// POST /api/upload: Upload files to temp_uploads/ with 2GB limit & 30-min auto-cleanup
+// POST /api/upload: Upload files to temp_uploads/ with no file size limit & 30-min auto-cleanup
 app.post('/api/upload', (req, res) => {
   uploadMiddleware.any()(req, res, (err) => {
     if (err) {
@@ -2997,8 +3029,12 @@ app.post('/api/upload', (req, res) => {
         try { if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch (e) {}
       }
 
+      if (err.code === 'ENOSPC' || (err.message && err.message.includes('ENOSPC'))) {
+        return res.status(507).json({ success: false, error: 'Upload failed: Not enough storage space on the server.' });
+      }
+
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(413).json({ success: false, error: 'File upload exceeds the 2GB limit.' });
+        return res.status(413).json({ success: false, error: 'File upload exceeds limit.' });
       }
       return res.status(400).json({ success: false, error: err.message || 'File upload failed.' });
     }
@@ -4111,6 +4147,13 @@ app.delete('/api/jobs/:id', (req, res) => {
 
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
+  if (err.code === 'ENOSPC' || (err.message && err.message.includes('ENOSPC'))) {
+    const errorMsg = 'Upload failed: Not enough storage space on the server.';
+    if (req.path.startsWith('/api/')) {
+      return res.status(507).json({ success: false, error: errorMsg });
+    }
+    return res.status(507).send(errorMsg);
+  }
   const status = err.status || err.statusCode || 500;
   if (req.path.startsWith('/api/')) {
     return res.status(status).json({
