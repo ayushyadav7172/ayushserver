@@ -94,11 +94,30 @@
     }
   }
 
+  function getOrCreateSessionId() {
+    let sid = null;
+    try {
+      sid = localStorage.getItem('ffstudio_session_id');
+      if (!sid) {
+        sid = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
+        localStorage.setItem('ffstudio_session_id', sid);
+      }
+    } catch (e) {
+      sid = 'sess_' + Date.now();
+    }
+    return sid;
+  }
+
   async function postJson(url, payload) {
+    const sessionId = getOrCreateSessionId();
+    const finalPayload = { ...(payload || {}), sessionId };
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-ID': sessionId
+      },
+      body: JSON.stringify(finalPayload)
     });
 
     const raw = await response.text();
@@ -776,11 +795,20 @@
     });
 
     if (successCount > 0) {
+      const expiresAt = data.expiresAt || (Date.now() + 30 * 60 * 1000);
+      data.expiresAt = expiresAt;
+      try {
+        localStorage.setItem('ffstudio_image_last_result', JSON.stringify({
+          data,
+          expiresAt
+        }));
+      } catch (e) {}
+
       const timerBox = document.createElement('div');
       timerBox.className = 'countdown-timer-box';
       shell.body.appendChild(timerBox);
       const outTimer = new AutoCleanupTimer(timerBox, 'ffstudio_image_output_timer');
-      outTimer.start(Date.now() + 30 * 60 * 1000, 'Output file(s) will be deleted in');
+      outTimer.start(expiresAt, 'Output file(s) will be deleted in');
     }
 
     const summary = data.summary || {};
@@ -1380,7 +1408,7 @@
             this.start(data.expiresAt, data.label || 'File will be deleted in');
             return true;
           } else {
-            this.clear();
+            this.showExpired();
             if (typeof this.onExpire === 'function') this.onExpire();
           }
         }
@@ -1388,14 +1416,23 @@
       return false;
     }
 
+    showExpired() {
+      if (!this.element) return;
+      this.stop();
+      this.element.style.display = 'inline-flex';
+      this.element.className = 'countdown-timer-box is-expired';
+      this.element.innerHTML = '⚠️ <span>File expired (deleted)</span>';
+    }
+
     tick() {
       if (!this.element) return;
-      const remaining = this.expiresAt - Date.now();
+      if (!this.expiresAt || isNaN(this.expiresAt)) {
+        this.clear();
+        return;
+      }
+      const remaining = Math.max(0, this.expiresAt - Date.now());
       if (remaining <= 0) {
-        this.element.style.display = 'inline-flex';
-        this.element.className = 'countdown-timer-box is-expired';
-        this.element.innerHTML = '⚠️ <span>File expired (deleted)</span>';
-        this.stop();
+        this.showExpired();
         if (this.storageKey) {
           try { localStorage.removeItem(this.storageKey); } catch (e) {}
         }
@@ -1446,6 +1483,10 @@
     });
 
     function setMode(mode) {
+      if (state.busy) {
+        showToast('Cannot switch storage modes while an operation is in progress.', 'warning');
+        return;
+      }
       if (mode === 'remote') {
         $('btnImageModeLocal')?.classList.remove('active');
         $('btnImageModeRemote')?.classList.add('active');
@@ -1459,10 +1500,41 @@
         if ($('imageLocalSection')) $('imageLocalSection').style.display = 'block';
         localStorage.setItem('ffstudio_image_mode', 'local');
       }
+      // Reset active queues and paths to prevent cross-mode accidental processing
+      state.paths = [];
+      state.info.clear();
+      state.activePath = null;
+      renderQueue();
+      if ($('imagePathInput')) $('imagePathInput').value = '';
+      if ($('imageFileInput')) $('imageFileInput').value = '';
     }
 
     $('btnImageModeLocal')?.addEventListener('click', () => setMode('local'));
     $('btnImageModeRemote')?.addEventListener('click', () => setMode('remote'));
+
+    // Manual Reset Session
+    $('btnClearImageSession')?.addEventListener('click', () => {
+      if (state.busy) {
+        showToast('Cannot reset session while an operation is running.', 'warning');
+        return;
+      }
+      if (confirm('Reset your remote image session? This clears cached results and active selections.')) {
+        try {
+          localStorage.removeItem('ffstudio_image_last_result');
+          localStorage.removeItem('ffstudio_image_upload_timer');
+          localStorage.removeItem('ffstudio_image_output_timer');
+          localStorage.removeItem('ffstudio_session_id');
+        } catch (e) {}
+        state.paths = [];
+        state.info.clear();
+        state.activePath = null;
+        renderQueue();
+        if (imageUploadCountdownTimer) imageUploadCountdownTimer.clear();
+        const res = $('imageResult');
+        if (res) res.innerHTML = '';
+        showToast('Image session reset successfully.', 'info');
+      }
+    });
 
     const savedMode = localStorage.getItem('ffstudio_image_mode') || 'local';
     setMode(savedMode);
@@ -1470,12 +1542,19 @@
     imageUploadCountdownTimer.recover();
 
     function uploadImages(files) {
+      if (state.busy) {
+        showToast('Server is busy processing another operation.', 'warning');
+        return;
+      }
       if (!files || files.length === 0) return;
       const fileList = Array.from(files);
       const valid = fileList.filter(f => SUPPORTED_EXTS.test(f.name));
       if (valid.length === 0) {
         showToast('Please select supported image formats (JPG, PNG, WebP, AVIF, TIFF).', 'warning');
         return;
+      }
+      if (valid.length < fileList.length) {
+        showToast(`Skipped ${fileList.length - valid.length} invalid file(s). Only images are supported.`, 'warning');
       }
 
       const totalBytes = valid.reduce((acc, f) => acc + f.size, 0);
@@ -1548,6 +1627,7 @@
       });
 
       xhr.open('POST', '/api/upload');
+      xhr.setRequestHeader('X-Session-ID', getOrCreateSessionId());
       xhr.send(formData);
     }
 
@@ -1586,6 +1666,18 @@
     }
   }
 
+  function recoverImageLastResult() {
+    try {
+      const raw = localStorage.getItem('ffstudio_image_last_result');
+      if (!raw) return;
+      const item = JSON.parse(raw);
+      if (item && item.expiresAt > Date.now() && item.data) {
+        item.data.expiresAt = item.expiresAt;
+        renderResults(item.data);
+      }
+    } catch (e) {}
+  }
+
   bindTheme();
   bindNavigation();
   bindStorageModeAndUpload();
@@ -1598,6 +1690,7 @@
   setCompressMode('percent', false);
   setResizeMode('dimensions', false);
   renderQueue();
+  recoverImageLastResult();
   if (window.location.hash === '#compress') switchTool('compress');
   if (window.location.hash === '#resize') switchTool('resize');
 })();

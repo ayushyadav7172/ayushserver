@@ -124,7 +124,9 @@ class AutoCleanupTimer {
 
   start(expiresAt, label = 'File will be deleted in') {
     this.stop();
-    this.expiresAt = Number(expiresAt);
+    const parsed = Number(expiresAt);
+    if (!parsed || isNaN(parsed)) return;
+    this.expiresAt = parsed;
     this.label = label;
     if (this.storageKey) {
       try {
@@ -138,6 +140,17 @@ class AutoCleanupTimer {
     this.interval = setInterval(() => this.tick(), 1000);
   }
 
+  showExpired() {
+    this.stop();
+    if (!this.element) return;
+    this.element.style.display = 'inline-flex';
+    this.element.className = 'countdown-timer-box is-expired';
+    this.element.innerHTML = '⚠️ <span>File expired (auto-deleted)</span>';
+    if (this.storageKey) {
+      try { localStorage.removeItem(this.storageKey); } catch (e) {}
+    }
+  }
+
   recover() {
     if (!this.storageKey) return false;
     try {
@@ -145,12 +158,14 @@ class AutoCleanupTimer {
       if (!raw) return false;
       const data = JSON.parse(raw);
       if (data && data.expiresAt) {
-        if (Number(data.expiresAt) > Date.now()) {
-          this.start(data.expiresAt, data.label || 'File will be deleted in');
+        const exp = Number(data.expiresAt);
+        if (exp > Date.now()) {
+          this.start(exp, data.label || 'File will be deleted in');
           return true;
         } else {
-          this.clear();
+          this.showExpired();
           if (typeof this.onExpire === 'function') this.onExpire();
+          return false;
         }
       }
     } catch (e) {}
@@ -159,15 +174,13 @@ class AutoCleanupTimer {
 
   tick() {
     if (!this.element) return;
-    const remaining = this.expiresAt - Date.now();
+    if (!this.expiresAt || isNaN(this.expiresAt)) {
+      this.clear();
+      return;
+    }
+    const remaining = Math.max(0, this.expiresAt - Date.now());
     if (remaining <= 0) {
-      this.element.style.display = 'inline-flex';
-      this.element.className = 'countdown-timer-box is-expired';
-      this.element.innerHTML = '⚠️ <span>File expired (deleted)</span>';
-      this.stop();
-      if (this.storageKey) {
-        try { localStorage.removeItem(this.storageKey); } catch (e) {}
-      }
+      this.showExpired();
       if (typeof this.onExpire === 'function') this.onExpire();
       return;
     }
@@ -391,6 +404,10 @@ function setupStorageModeAndUpload() {
 
   // Mode Toggle logic
   function setMode(mode) {
+    if (isConversionRunning) {
+      showToast('A media conversion is currently running. Please wait for it to finish or stop it before switching modes.', 'warning');
+      return;
+    }
     if (mode === 'remote') {
       if (btnMediaModeLocal) btnMediaModeLocal.classList.remove('active');
       if (btnMediaModeRemote) btnMediaModeRemote.classList.add('active');
@@ -404,6 +421,11 @@ function setupStorageModeAndUpload() {
       if (mediaLocalSection) mediaLocalSection.style.display = 'block';
       localStorage.setItem('ffstudio_media_mode', 'local');
     }
+
+    // Reset selected media and form inputs on mode switch
+    clearSelectedMedia();
+    if (mediaFileInput) mediaFileInput.value = '';
+    if (explorerSearchInput) explorerSearchInput.value = '';
   }
 
   if (btnMediaModeLocal) {
@@ -421,9 +443,45 @@ function setupStorageModeAndUpload() {
   mediaUploadCountdownTimer.recover();
   mediaOutputCountdownTimer.recover();
 
+  // Manual Reset / Clear Session Handler
+  const btnClearMediaSession = document.getElementById('btnClearMediaSession');
+  if (btnClearMediaSession) {
+    btnClearMediaSession.addEventListener('click', () => {
+      if (isConversionRunning) {
+        showToast('Cannot reset session while a conversion is currently running.', 'warning');
+        return;
+      }
+      if (confirm('Reset your remote session? This clears your temporary session key and reset timers.')) {
+        mediaUploadCountdownTimer.clear();
+        mediaOutputCountdownTimer.clear();
+        clearSelectedMedia();
+        try {
+          localStorage.removeItem('ffstudio_session_id');
+        } catch (e) {}
+        showToast('Session reset. A fresh session ID has been generated.', 'info');
+      }
+    });
+  }
+
   // Upload handler
   function uploadFile(file) {
     if (!file) return;
+    if (isConversionRunning) {
+      showToast('A conversion is already running. Please wait for it to finish or cancel it before uploading.', 'warning');
+      return;
+    }
+
+    const ALLOWED_MEDIA = new Set([
+      '.mp4', '.mkv', '.avi', '.mov', '.webm',
+      '.mp3', '.wav', '.m4a', '.aac',
+      '.flac', '.ogg', '.opus', '.ts', '.m4v', '.3gp'
+    ]);
+    const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
+    if (!ALLOWED_MEDIA.has(ext)) {
+      showToast(`Unsupported media format (${ext || 'unknown'}). Please upload a video or audio file (.mp4, .mkv, .mp3, etc.).`, 'error');
+      return;
+    }
+
     if (file.size > 2 * 1024 * 1024 * 1024) {
       showToast('File size exceeds the 2GB limit.', 'error');
       return;
@@ -615,7 +673,8 @@ function stopPollingFallback() {
 
 async function pollCurrentJob() {
   try {
-    const res = await fetch('/api/current-job');
+    const sessionId = getOrCreateSessionId();
+    const res = await fetch(`/api/current-job?sessionId=${encodeURIComponent(sessionId)}`);
     if (!res.ok) return;
     const data = await readApiPayload(res);
     if (!data || !data.activeJob) return;
@@ -697,7 +756,7 @@ async function checkActiveJobState() {
       // Reconnect to SSE stream to get live updates
       listenJobProgress(job.jobId);
       showToast(`Resumed monitoring: ${job.filename}`, 'info');
-    } else if (job.status === 'completed' && data.isAvailable) {
+    } else if (job.status === 'completed' && (data.isAvailable || data.outputAvailable)) {
       console.log('[State Restore] Completed job with valid output file found:', job);
       currentJobId = job.jobId;
       const currentTab = getTabFromHash();
@@ -867,9 +926,11 @@ function setupNavigation() {
   // Clear Job History Button
   if (btnClearHistory) {
     btnClearHistory.addEventListener('click', async () => {
-      if (!window.confirm('Are you sure you want to clear all job history logs?')) return;
+      if (!window.confirm('Are you sure you want to clear job history logs?')) return;
       try {
-        const res = await fetch('/api/jobs', { method: 'DELETE' });
+        const sid = isRemoteModeActive() ? getOrCreateSessionId() : '';
+        const headers = sid ? { 'X-Session-ID': sid } : {};
+        const res = await fetch('/api/jobs' + (sid ? `?sessionId=${encodeURIComponent(sid)}` : ''), { method: 'DELETE', headers });
         const data = await readApiPayload(res);
         if (data.success) {
           showToast('Job history cleared', 'info');
@@ -2883,7 +2944,10 @@ function handleJobCancelled(data) {
 // ======================== HISTORY & LOGS ========================
 async function loadJobHistory() {
   try {
-    const res = await fetch('/api/jobs');
+    const sid = isRemoteModeActive() ? getOrCreateSessionId() : '';
+    const url = '/api/jobs' + (sid ? `?sessionId=${encodeURIComponent(sid)}` : '');
+    const headers = sid ? { 'X-Session-ID': sid } : {};
+    const res = await fetch(url, { headers });
     const data = await readApiPayload(res);
     renderHistory(data.jobs || []);
   } catch (err) {
@@ -2969,7 +3033,10 @@ window.openLogModal = async function(jobId, commandStr = '', defaultStderr = '')
 
   if (jobId) {
     try {
-      const res = await fetch(`/api/jobs/${jobId}/logs`);
+      const sid = isRemoteModeActive() ? getOrCreateSessionId() : '';
+      const url = `/api/jobs/${jobId}/logs` + (sid ? `?sessionId=${encodeURIComponent(sid)}` : '');
+      const headers = sid ? { 'X-Session-ID': sid } : {};
+      const res = await fetch(url, { headers });
       const data = await readApiPayload(res);
       if (data.stderr || data.logs) {
         modalLogContent.textContent = data.stderr || data.logs || 'No log output captured.';

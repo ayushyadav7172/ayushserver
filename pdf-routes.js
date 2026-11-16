@@ -1180,7 +1180,7 @@ function createPdfRouter(deps) {
     });
   }));
 
-  router.post('/images-to-pdf', upload, asyncRoute(async (req, res) => {
+  router.post('/images-to-pdf', pdfConcurrencyMiddleware('Images to PDF'), upload, asyncRoute(async (req, res) => {
     const body = req.body || {};
     const sources = collectImageSources(req, body, {
       field: 'images',
@@ -1271,7 +1271,7 @@ function createPdfRouter(deps) {
     });
   }));
 
-  router.post('/pdf-to-images', upload, asyncRoute(async (req, res) => {
+  router.post('/pdf-to-images', pdfConcurrencyMiddleware('PDF to Images'), upload, asyncRoute(async (req, res) => {
     const body = req.body || {};
     const directPath = getBodyValue(body, 'inputPath') || getBodyValue(body, 'filePath');
     const uploadFile = getFirstUpload(req, 'file');

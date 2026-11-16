@@ -22,6 +22,8 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const THUMBS_DIR = path.join(__dirname, 'temp_thumbs');
 const TEMP_UPLOADS_DIR = path.join(__dirname, 'temp_uploads');
 const PROCESSED_DIR = path.join(__dirname, 'processed');
+const PDF_TEMP_UPLOADS_DIR = path.join(__dirname, 'temp_pdf_uploads');
+const PDF_OUTPUTS_DIR = path.join(__dirname, 'pdf_outputs');
 
 if (!fs.existsSync(PUBLIC_DIR)) {
   fs.mkdirSync(PUBLIC_DIR, { recursive: true });
@@ -35,10 +37,16 @@ if (!fs.existsSync(TEMP_UPLOADS_DIR)) {
 if (!fs.existsSync(PROCESSED_DIR)) {
   fs.mkdirSync(PROCESSED_DIR, { recursive: true });
 }
+if (!fs.existsSync(PDF_TEMP_UPLOADS_DIR)) {
+  fs.mkdirSync(PDF_TEMP_UPLOADS_DIR, { recursive: true });
+}
+if (!fs.existsSync(PDF_OUTPUTS_DIR)) {
+  fs.mkdirSync(PDF_OUTPUTS_DIR, { recursive: true });
+}
 
 // ======================== PATH SAFETY (ALLOWLIST) ========================
 // Only media under phone storage or the Termux home directory may be accessed.
-const ALLOWED_ROOTS = ['/sdcard', '/storage', process.env.HOME || os.homedir(), __dirname, TEMP_UPLOADS_DIR, PROCESSED_DIR]
+const ALLOWED_ROOTS = ['/sdcard', '/storage', process.env.HOME || os.homedir(), __dirname, TEMP_UPLOADS_DIR, PROCESSED_DIR, PDF_TEMP_UPLOADS_DIR, PDF_OUTPUTS_DIR]
   .filter(Boolean);
 
 // Resolve symlinks on the nearest existing ancestor so non-existent output
@@ -219,6 +227,36 @@ let activeJob = {
   isRemoteUpload: false
 };
 
+// Standardize job payload for clients regardless of whether it came from activeJob or jobs Map
+function formatJobForClient(job) {
+  if (!job) return null;
+  const progressPercent = typeof job.progress === 'number'
+    ? job.progress
+    : (job.progress && typeof job.progress.percent === 'number' ? job.progress.percent : 0);
+  const currentTime = job.currentTime || (job.progress && job.progress.time) || '00:00:00';
+  const speed = job.speed || (job.progress && job.progress.speed) || 'N/A';
+  const totalDuration = job.totalDuration || (job.expectedDuration ? formatTime(job.expectedDuration) : '00:00:00');
+
+  return {
+    jobId: job.id || job.jobId || null,
+    sessionId: job.sessionId || null,
+    status: job.status || 'idle',
+    filePath: job.filePath || (job.inputPaths && job.inputPaths[0]) || '',
+    filename: job.filename || (job.filePath ? path.basename(job.filePath) : ''),
+    operation: job.operation || '',
+    progress: progressPercent,
+    currentTime,
+    totalDuration,
+    totalDurationSec: job.totalDurationSec || job.expectedDuration || 0,
+    speed,
+    outputPath: job.outputPath || '',
+    commandString: job.commandString || '',
+    error: job.error || null,
+    outputFile: job.outputFile || null,
+    isRemoteUpload: Boolean(job.isRemoteUpload)
+  };
+}
+
 // ==================== UNIFIED JOB CONCURRENCY LOCK ====================
 // Termux on Android is resource-constrained. Ensure Media Studio (FFmpeg)
 // and PDF Studio (qpdf, Ghostscript, pdf-lib, pdftoppm) do not run heavy jobs
@@ -372,11 +410,13 @@ function isFileInActiveProcessing(filePath) {
 
 // Rule D: Immediately clean up temp uploaded file(s) on cancel/error
 function cleanupTempUploadsOnError(...filePaths) {
+  const tempDirs = [TEMP_UPLOADS_DIR, PDF_TEMP_UPLOADS_DIR, THUMBS_DIR];
   for (const p of filePaths) {
     if (!p || typeof p !== 'string') continue;
     try {
       const resolved = path.resolve(p);
-      if (resolved.startsWith(TEMP_UPLOADS_DIR) && fs.existsSync(resolved)) {
+      const isUnderTemp = tempDirs.some(dir => isPathWithinRoot(resolved, dir) || resolved === dir);
+      if (isUnderTemp && fs.existsSync(resolved)) {
         fs.unlinkSync(resolved);
         console.log(`[Auto-Cleanup] Immediately deleted temp upload on error/cancel: ${resolved}`);
       }
@@ -387,7 +427,7 @@ function cleanupTempUploadsOnError(...filePaths) {
 }
 
 function cleanDirectory(dirPath, isTempUploads = false) {
-  if (!fs.existsSync(dirPath)) return;
+  if (!dirPath || !fs.existsSync(dirPath)) return;
   try {
     const entries = fs.readdirSync(dirPath);
     const now = Date.now();
@@ -403,23 +443,10 @@ function cleanDirectory(dirPath, isTempUploads = false) {
 
       const ageMs = now - stats.mtimeMs;
       if (ageMs > THIRTY_MINUTES_MS) {
-        // Active Job Exception (Rule A & Rule C for temp_uploads):
-        if (isTempUploads) {
-          // Rule C: MUST NOT delete while activeJob.status === 'processing'
-          if (activeJob && activeJob.status === 'processing') {
-            console.log(`[Auto-Cleanup] Rule C: Skipping ${entry} in temp_uploads because activeJob.status === 'processing'.`);
-            continue;
-          }
-          if (isFileInActiveProcessing(fullPath)) {
-            console.log(`[Auto-Cleanup] Rule C: Skipping ${entry} in temp_uploads because it is actively being processed.`);
-            continue;
-          }
-        } else {
-          // Rule B for processed/:
-          if (isFileInActiveProcessing(fullPath)) {
-            console.log(`[Auto-Cleanup] Skipping ${entry} in processed because it is actively being accessed/written.`);
-            continue;
-          }
+        // Skip files that are actively being read or written by any job
+        if (isFileInActiveProcessing(fullPath)) {
+          console.log(`[Auto-Cleanup] Skipping active file (${entry}) in ${path.basename(dirPath)}.`);
+          continue;
         }
 
         try {
@@ -442,7 +469,10 @@ function cleanDirectory(dirPath, isTempUploads = false) {
 
 function runAutoCleanup() {
   cleanDirectory(TEMP_UPLOADS_DIR, true);
+  cleanDirectory(PDF_TEMP_UPLOADS_DIR, true);
   cleanDirectory(PROCESSED_DIR, false);
+  cleanDirectory(PDF_OUTPUTS_DIR, false);
+  cleanDirectory(THUMBS_DIR, false);
 }
 
 // Rule E: Server Restart - cleanup script runs once on server startup
@@ -452,13 +482,29 @@ runAutoCleanup();
 setInterval(runAutoCleanup, 2 * 60 * 1000);
 
 // ======================== MULTER CONFIGURATION ========================
+// Strict filename sanitizer: strips null bytes, path traversal, control chars, limits length
+function sanitizeUploadFilename(originalName) {
+  if (!originalName || typeof originalName !== 'string') return 'upload.bin';
+  // Strip null bytes and control chars
+  const clean = originalName.replace(/[\x00-\x1f\x7f]/g, '');
+  const baseRaw = path.basename(clean);
+  const extRaw = path.extname(baseRaw).toLowerCase().replace(/[^a-z0-9.]/g, '');
+  const nameWithoutExt = path.basename(baseRaw, extRaw)
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/^_+/, '')
+    .slice(0, 60);
+  const finalBase = nameWithoutExt || 'file';
+  const finalExt = extRaw.slice(0, 10);
+  return `${finalBase}${finalExt}`;
+}
+
 const uploadStorage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, TEMP_UPLOADS_DIR);
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
-    const safeOriginal = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const safeOriginal = sanitizeUploadFilename(file.originalname);
     cb(null, `${uniqueSuffix}-${safeOriginal}`);
   }
 });
@@ -1548,26 +1594,43 @@ function buildFfmpegArgs(operation, options, inputPaths, outputPath, primaryDura
 // SSE broadcaster
 function notifyJobSubscribers(jobId, payload) {
   const data = `data: ${JSON.stringify(payload)}\n\n`;
-  const targets = new Set();
+  const targetJob = jobId ? jobs.get(jobId) : null;
+  const targetSessionId = (targetJob && targetJob.sessionId) || (payload.activeJob && payload.activeJob.sessionId);
 
+  // 1. Job-specific subscribers
   if (jobId && sseSubscribers.has(jobId)) {
     for (const client of sseSubscribers.get(jobId)) {
-      targets.add(client);
+      try {
+        client.write(data);
+      } catch (e) {
+        if (jobId && sseSubscribers.has(jobId)) {
+          sseSubscribers.get(jobId).delete(client);
+        }
+      }
     }
   }
 
+  // 2. Global SSE subscribers
   for (const client of globalSseClients) {
-    targets.add(client);
-  }
+    if (jobId && sseSubscribers.has(jobId) && sseSubscribers.get(jobId).has(client)) {
+      continue;
+    }
+    // If client is bound to a different session, don't leak private job details
+    if (client.clientSessionId && targetSessionId && client.clientSessionId !== targetSessionId) {
+      if (payload.type === 'status') {
+        try {
+          client.write(`data: ${JSON.stringify({ type: 'server_status', isServerBusy: payload.status === 'processing' })}\n\n`);
+        } catch (e) {
+          globalSseClients.delete(client);
+        }
+      }
+      continue;
+    }
 
-  for (const client of targets) {
     try {
       client.write(data);
     } catch (e) {
       globalSseClients.delete(client);
-      if (jobId && sseSubscribers.has(jobId)) {
-        sseSubscribers.get(jobId).delete(client);
-      }
     }
   }
 
@@ -2854,8 +2917,8 @@ app.use('/api/image', imageRouter);
 // 1. Current Active Job State (For browser refresh / state restore)
 // GET /api/current-job
 app.get('/api/current-job', (req, res) => {
-  const clientSessionId = req.query.sessionId || req.headers['x-session-id'];
-  let returnedJob = activeJob;
+  const clientSessionId = req.query.sessionId || req.headers['x-session-id'] || null;
+  let returnedJob = null;
 
   if (clientSessionId) {
     if (activeJob && activeJob.sessionId === clientSessionId) {
@@ -2868,16 +2931,52 @@ app.get('/api/current-job', (req, res) => {
         }
       }
     }
+  } else {
+    // Local / direct client without session ID: only return if activeJob has no session ID
+    if (activeJob && !activeJob.sessionId) {
+      returnedJob = activeJob;
+    }
   }
 
-  const outPath = returnedJob?.outputPath || returnedJob?.outputFile?.path;
+  const clientJob = returnedJob ? formatJobForClient(returnedJob) : {
+    jobId: null,
+    sessionId: clientSessionId,
+    status: 'idle',
+    filePath: '',
+    filename: '',
+    operation: '',
+    progress: 0,
+    currentTime: '00:00:00',
+    totalDuration: '00:00:00',
+    totalDurationSec: 0,
+    speed: '0.0x',
+    outputPath: '',
+    commandString: '',
+    error: null,
+    outputFile: null,
+    isRemoteUpload: false
+  };
+
+  const outPath = clientJob?.outputPath || clientJob?.outputFile?.path;
   const isAvailable = Boolean(outPath && fs.existsSync(outPath));
+
+  const isServerBusy = Boolean(
+    (activeJob && activeJob.status === 'processing') ||
+    (concurrencyLock.pdfJob && concurrencyLock.pdfJob.isProcessing) ||
+    (concurrencyLock.imageJob && concurrencyLock.imageJob.isProcessing)
+  );
 
   res.json({
     success: true,
-    activeJob: returnedJob,
+    activeJob: clientJob,
     isAvailable,
     outputAvailable: isAvailable,
+    isServerBusy,
+    serverBusyDetails: isServerBusy ? {
+      mediaProcessing: Boolean(activeJob && activeJob.status === 'processing'),
+      pdfProcessing: Boolean(concurrencyLock.pdfJob && concurrencyLock.pdfJob.isProcessing),
+      imageProcessing: Boolean(concurrencyLock.imageJob && concurrencyLock.imageJob.isProcessing)
+    } : null,
     activePdfJob: concurrencyLock ? concurrencyLock.pdfJob : { isProcessing: false },
     activeImageJob: concurrencyLock ? concurrencyLock.imageJob : { isProcessing: false }
   });
@@ -2888,6 +2987,16 @@ app.get('/api/current-job', (req, res) => {
 app.post('/api/upload', (req, res) => {
   uploadMiddleware.any()(req, res, (err) => {
     if (err) {
+      // Clean up any files that were partially saved during this request
+      if (req.files && Array.isArray(req.files)) {
+        for (const f of req.files) {
+          try { if (f.path && fs.existsSync(f.path)) fs.unlinkSync(f.path); } catch (e) {}
+        }
+      }
+      if (req.file && req.file.path) {
+        try { if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch (e) {}
+      }
+
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(413).json({ success: false, error: 'File upload exceeds the 2GB limit.' });
       }
@@ -2898,6 +3007,7 @@ app.post('/api/upload', (req, res) => {
       return res.status(400).json({ success: false, error: 'No files were uploaded.' });
     }
 
+    const sessionId = req.headers['x-session-id'] || req.body?.sessionId || null;
     const now = Date.now();
     const files = uploadedFiles.map(f => {
       const fullPath = path.resolve(f.path);
@@ -2908,6 +3018,7 @@ app.post('/api/upload', (req, res) => {
         size: f.size,
         sizeFormatted: formatBytes(f.size),
         mimetype: f.mimetype,
+        sessionId,
         uploadedAt: now,
         expiresAt: now + (30 * 60 * 1000)
       };
@@ -2921,37 +3032,46 @@ app.post('/api/upload', (req, res) => {
   });
 });
 
-// GET /api/download/:filename: Serve processed files using res.download
+// GET /api/download/:filename: Serve processed and temp files securely
 app.get('/api/download/:filename', (req, res) => {
   try {
-    const rawFilename = path.basename(req.params.filename);
-    let filePath = path.join(PROCESSED_DIR, rawFilename);
+    const rawParam = req.params.filename;
+    if (!rawParam || typeof rawParam !== 'string' || rawParam.includes('\0') || rawParam.includes('/') || rawParam.includes('\\')) {
+      return res.status(400).send('Invalid filename.');
+    }
 
-    if (!fs.existsSync(filePath)) {
-      // Fallback 1: check temp_pdf_outputs if it exists
-      const pdfOutputDir = path.join(__dirname, 'pdf_outputs', rawFilename);
-      if (fs.existsSync(pdfOutputDir)) {
-        filePath = pdfOutputDir;
-      } else {
-        // Fallback 2: check temp_uploads
-        const tempPath = path.join(TEMP_UPLOADS_DIR, rawFilename);
-        if (fs.existsSync(tempPath)) {
-          filePath = tempPath;
-        } else if (req.query.path) {
-          // Fallback 3: check query path if allowed (e.g. for local storage mode downloads)
-          const customPath = path.resolve(String(req.query.path));
-          if (isPathAllowed(customPath) && fs.existsSync(customPath)) {
-            filePath = customPath;
-          } else {
-            return res.status(404).send('File not found or has expired (auto-deleted after 30 minutes).');
-          }
-        } else {
-          return res.status(404).send('File not found or has expired (auto-deleted after 30 minutes).');
+    const rawFilename = path.basename(rawParam);
+    if (!rawFilename || rawFilename === '.' || rawFilename === '..') {
+      return res.status(400).send('Invalid filename.');
+    }
+
+    const allowedDownloadDirs = [
+      PROCESSED_DIR,
+      TEMP_UPLOADS_DIR,
+      PDF_OUTPUTS_DIR,
+      PDF_TEMP_UPLOADS_DIR
+    ].filter(Boolean);
+
+    let foundPath = null;
+
+    for (const dir of allowedDownloadDirs) {
+      const candidate = path.join(dir, rawFilename);
+      const canonical = canonicalizeTarget(candidate);
+      const canonicalDir = canonicalizeTarget(dir);
+      if (isPathWithinRoot(canonical, canonicalDir) || canonical === canonicalDir) {
+        if (fs.existsSync(canonical) && fs.statSync(canonical).isFile()) {
+          foundPath = canonical;
+          break;
         }
       }
     }
 
-    return res.download(filePath, rawFilename);
+    if (!foundPath) {
+      return res.status(404).send('File not found or has expired (auto-deleted after 30 minutes).');
+    }
+
+    const safeDownloadName = sanitizeUploadFilename(rawFilename);
+    return res.download(foundPath, safeDownloadName);
   } catch (err) {
     console.error('[Download Error]', err);
     res.status(500).send('Error downloading file: ' + err.message);
@@ -3251,7 +3371,15 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
     });
   }
 
+  const clientSessionId = req.body?.sessionId || req.headers['x-session-id'] || null;
+
   activeJob.status = 'processing';
+  activeJob.sessionId = clientSessionId;
+  activeJob.jobId = null;
+  activeJob.filePath = req.body?.filePath || '';
+  activeJob.filename = req.body?.filePath ? path.basename(req.body.filePath) : '';
+  activeJob.progress = 0;
+  activeJob.error = null;
 
   try {
     const { filePath, operation, options = {}, operations, audioTracks, subtitleConfig, hardwareAccel, isLosslessCopy, muteAudio } = req.body;
@@ -3491,7 +3619,15 @@ app.post('/api/run-custom', async (req, res) => {
     });
   }
 
+  const clientSessionId = req.body?.sessionId || req.headers['x-session-id'] || null;
+
   activeJob.status = 'processing';
+  activeJob.sessionId = clientSessionId;
+  activeJob.jobId = null;
+  activeJob.filePath = req.body?.filePath || '';
+  activeJob.filename = req.body?.filePath ? path.basename(req.body.filePath) : '';
+  activeJob.progress = 0;
+  activeJob.error = null;
 
   try {
     const { command, filePath } = req.body || {};
@@ -3533,6 +3669,7 @@ app.post('/api/run-custom', async (req, res) => {
     // Initialize global activeJob
     activeJob = {
       jobId,
+      sessionId: clientSessionId,
       status: 'processing',
       filePath: resolvedPath || '',
       filename,
@@ -3550,6 +3687,7 @@ app.post('/api/run-custom', async (req, res) => {
 
     const job = {
       id: jobId,
+      sessionId: clientSessionId,
       name: `CUSTOM - ${filename}`,
       operation: 'custom',
       isCustom: true,
@@ -3603,8 +3741,18 @@ app.post('/api/run-custom', async (req, res) => {
 // POST /api/cancel-job
 app.post('/api/cancel-job', (req, res) => {
   try {
+    const clientSessionId = req.body?.sessionId || req.headers['x-session-id'] || null;
     const targetJobId = req.body && req.body.jobId ? req.body.jobId : activeJob.jobId;
     const job = targetJobId ? jobs.get(targetJobId) : null;
+
+    // Security check: If target job has a sessionId and caller has a sessionId that doesn't match, block cancellation!
+    const jobSession = (job && job.sessionId) || activeJob.sessionId;
+    if (jobSession && clientSessionId && jobSession !== clientSessionId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Unauthorized: You cannot cancel a job belonging to another session.'
+      });
+    }
 
     // Only treat this as a real cancellation when something is actually
     // running. Otherwise a stray request (or a stale Stop click) would mark a
@@ -3618,7 +3766,7 @@ app.post('/api/cancel-job', (req, res) => {
       return res.json({
         success: true,
         message: 'No active job to cancel.',
-        activeJob
+        activeJob: formatJobForClient(activeJob)
       });
     }
 
@@ -3677,7 +3825,7 @@ app.post('/api/cancel-job', (req, res) => {
       status: 'cancelled',
       jobId: targetJobId || activeJob.jobId,
       message: 'Conversion cancelled by user',
-      activeJob
+      activeJob: formatJobForClient(activeJob)
     };
 
     if (targetJobId) {
@@ -3694,7 +3842,7 @@ app.post('/api/cancel-job', (req, res) => {
     res.json({
       success: true,
       message: 'Conversion cancelled by user',
-      activeJob
+      activeJob: formatJobForClient(activeJob)
     });
   } catch (err) {
     console.error('[Cancel Job] Error cancelling job:', err);
@@ -3704,7 +3852,8 @@ app.post('/api/cancel-job', (req, res) => {
 
 // 6. SSE Progress Stream
 app.get(['/api/progress/:jobId', '/api/progress'], (req, res) => {
-  const jobId = req.params.jobId || activeJob.jobId;
+  const clientSessionId = req.query.sessionId || req.headers['x-session-id'] || null;
+  const jobId = req.params.jobId || req.query.jobId || (activeJob.sessionId === clientSessionId ? activeJob.jobId : null);
 
   // Clear any pending zombie kill timer since a client is active
   if (zombieInactivityTimer) {
@@ -3718,6 +3867,9 @@ app.get(['/api/progress/:jobId', '/api/progress'], (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
+  res.clientSessionId = clientSessionId;
+  res.clientJobId = jobId;
+
   if (jobId) {
     if (!sseSubscribers.has(jobId)) {
       sseSubscribers.set(jobId, new Set());
@@ -3726,19 +3878,34 @@ app.get(['/api/progress/:jobId', '/api/progress'], (req, res) => {
   }
   globalSseClients.add(res);
 
-  console.log(`[SSE Connection] Client connected to /api/progress (Job: ${jobId || 'all'}, Active SSE: ${globalSseClients.size})`);
+  console.log(`[SSE Connection] Client connected to /api/progress (Job: ${jobId || 'none'}, Session: ${clientSessionId || 'none'}, Active SSE: ${globalSseClients.size})`);
 
   // Send initial state immediately upon connection
+  let targetJob = jobId ? jobs.get(jobId) : null;
+  if (!targetJob && activeJob && (!clientSessionId || activeJob.sessionId === clientSessionId)) {
+    targetJob = activeJob;
+  }
+  const formattedInit = targetJob ? formatJobForClient(targetJob) : {
+    jobId: null,
+    sessionId: clientSessionId,
+    status: 'idle',
+    progress: 0,
+    currentTime: '00:00:00',
+    totalDuration: '00:00:00',
+    speed: '0.0x',
+    outputFile: null
+  };
+
   const initialPayload = {
     type: 'init',
-    jobId: activeJob.jobId,
-    status: activeJob.status,
-    progress: activeJob.progress,
-    currentTime: activeJob.currentTime,
-    totalDuration: activeJob.totalDuration,
-    speed: activeJob.speed,
-    activeJob,
-    outputFile: activeJob.outputFile
+    jobId: formattedInit.jobId,
+    status: formattedInit.status,
+    progress: formattedInit.progress,
+    currentTime: formattedInit.currentTime,
+    totalDuration: formattedInit.totalDuration,
+    speed: formattedInit.speed,
+    activeJob: formattedInit,
+    outputFile: formattedInit.outputFile
   };
   res.write(`data: ${JSON.stringify(initialPayload)}\n\n`);
 
@@ -3754,13 +3921,13 @@ app.get(['/api/progress/:jobId', '/api/progress'], (req, res) => {
     console.log(`[SSE Connection] Client disconnected (Remaining SSE: ${globalSseClients.size})`);
 
     // Zombie process prevention: If user closes browser mid-conversion,
-    // wait 5 seconds (to allow page refresh). If still 0 clients connected,
+    // wait 30 seconds (to allow page refresh). If still 0 clients connected,
     // kill the active FFmpeg process and reset activeJob to idle.
     if (globalSseClients.size === 0 && activeJob.status === 'processing') {
       if (zombieInactivityTimer) clearTimeout(zombieInactivityTimer);
       zombieInactivityTimer = setTimeout(() => {
         if (globalSseClients.size === 0 && activeJob.status === 'processing') {
-          console.warn(`[Zombie Protection] No client connected for 5s while job ${activeJob.jobId} was running. Terminating FFmpeg process.`);
+          console.warn(`[Zombie Protection] No client connected for 30s while job ${activeJob.jobId} was running. Terminating FFmpeg process.`);
           if (currentFFmpegProcess && !currentFFmpegProcess.killed) {
             try {
               const pid = currentFFmpegProcess.pid;
@@ -3776,7 +3943,7 @@ app.get(['/api/progress/:jobId', '/api/progress'], (req, res) => {
           activeJob.jobId = null;
           activeJob.error = 'Job cancelled: browser disconnected.';
         }
-      }, 5000);
+      }, 30000);
     }
   });
 });
@@ -3872,9 +4039,14 @@ app.get('/api/stream-file', (req, res) => {
   }
 });
 
-// 8. Job History & Logs
+// 8. Job History & Logs (Session-Isolated)
 app.get('/api/jobs', (req, res) => {
-  const jobList = Array.from(jobs.values()).map(j => ({
+  const sessionId = req.headers['x-session-id'] || req.query.sessionId;
+  let all = Array.from(jobs.values());
+  if (sessionId) {
+    all = all.filter(j => j.sessionId === sessionId);
+  }
+  const jobList = all.map(j => ({
     id: j.id,
     name: j.name,
     operation: j.operation,
@@ -3895,25 +4067,46 @@ app.get('/api/jobs', (req, res) => {
 app.get('/api/jobs/:id/logs', (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Job not found' });
+  const sessionId = req.headers['x-session-id'] || req.query.sessionId;
+  if (sessionId && job.sessionId && job.sessionId !== sessionId) {
+    return res.status(403).json({ error: 'Unauthorized to view logs for this job' });
+  }
   res.json({
     id: job.id,
     name: job.name,
     commandString: job.commandString,
-    logs: job.logs.join(''),
+    logs: (job.logs || []).join(''),
     stderr: job.stderr || (job.logs ? job.logs.slice(-50).join('') : ''),
     status: job.status
   });
 });
 
-// Clear Job History
+// Clear Job History (Session-Isolated)
 app.delete('/api/jobs', (req, res) => {
+  const sessionId = req.headers['x-session-id'] || req.query.sessionId;
+  if (sessionId) {
+    let count = 0;
+    for (const [id, job] of jobs.entries()) {
+      if (job.sessionId === sessionId) {
+        jobs.delete(id);
+        count++;
+      }
+    }
+    return res.json({ success: true, message: `Cleared ${count} job(s) for your session` });
+  }
   jobs.clear();
   res.json({ success: true, message: 'All job history cleared' });
 });
 
 app.delete('/api/jobs/:id', (req, res) => {
-  const existed = jobs.delete(req.params.id);
-  res.json({ success: existed, message: existed ? 'Job log deleted' : 'Job not found' });
+  const job = jobs.get(req.params.id);
+  if (!job) return res.json({ success: false, message: 'Job not found' });
+  const sessionId = req.headers['x-session-id'] || req.query.sessionId;
+  if (sessionId && job.sessionId && job.sessionId !== sessionId) {
+    return res.status(403).json({ error: 'Unauthorized to delete this job' });
+  }
+  jobs.delete(req.params.id);
+  res.json({ success: true, message: 'Job log deleted' });
 });
 
 app.use((err, req, res, next) => {

@@ -78,11 +78,30 @@
     }
   }
 
+  function getOrCreateSessionId() {
+    let sid = null;
+    try {
+      sid = localStorage.getItem('ffstudio_session_id');
+      if (!sid) {
+        sid = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
+        localStorage.setItem('ffstudio_session_id', sid);
+      }
+    } catch (e) {
+      sid = 'sess_' + Date.now();
+    }
+    return sid;
+  }
+
   async function postJson(url, payload) {
+    const sessionId = getOrCreateSessionId();
+    const finalPayload = { ...(payload || {}), sessionId };
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-ID': sessionId
+      },
+      body: JSON.stringify(finalPayload)
     });
 
     const raw = await response.text();
@@ -132,7 +151,9 @@
 
     start(expiresAt, label = 'File will be deleted in') {
       this.stop();
-      this.expiresAt = Number(expiresAt);
+      const parsed = Number(expiresAt);
+      if (!parsed || isNaN(parsed)) return;
+      this.expiresAt = parsed;
       this.label = label;
       if (this.storageKey) {
         try {
@@ -146,6 +167,17 @@
       this.interval = setInterval(() => this.tick(), 1000);
     }
 
+    showExpired() {
+      this.stop();
+      if (!this.element) return;
+      this.element.style.display = 'inline-flex';
+      this.element.className = 'countdown-timer-box is-expired';
+      this.element.innerHTML = '⚠️ <span>File expired (auto-deleted)</span>';
+      if (this.storageKey) {
+        try { localStorage.removeItem(this.storageKey); } catch (e) {}
+      }
+    }
+
     recover() {
       if (!this.storageKey) return false;
       try {
@@ -153,12 +185,14 @@
         if (!raw) return false;
         const data = JSON.parse(raw);
         if (data && data.expiresAt) {
-          if (Number(data.expiresAt) > Date.now()) {
-            this.start(data.expiresAt, data.label || 'File will be deleted in');
+          const exp = Number(data.expiresAt);
+          if (exp > Date.now()) {
+            this.start(exp, data.label || 'File will be deleted in');
             return true;
           } else {
-            this.clear();
+            this.showExpired();
             if (typeof this.onExpire === 'function') this.onExpire();
+            return false;
           }
         }
       } catch (e) {}
@@ -167,15 +201,13 @@
 
     tick() {
       if (!this.element) return;
-      const remaining = this.expiresAt - Date.now();
+      if (!this.expiresAt || isNaN(this.expiresAt)) {
+        this.clear();
+        return;
+      }
+      const remaining = Math.max(0, this.expiresAt - Date.now());
       if (remaining <= 0) {
-        this.element.style.display = 'inline-flex';
-        this.element.className = 'countdown-timer-box is-expired';
-        this.element.innerHTML = '⚠️ <span>File expired (deleted)</span>';
-        this.stop();
-        if (this.storageKey) {
-          try { localStorage.removeItem(this.storageKey); } catch (e) {}
-        }
+        this.showExpired();
         if (typeof this.onExpire === 'function') this.onExpire();
         return;
       }
@@ -228,16 +260,32 @@
     document.querySelectorAll('.pdf-remote-only').forEach((el) => {
       el.style.display = isRemote ? 'block' : 'none';
     });
+
+    const notice = $('pdfSessionNotice');
+    if (notice) notice.style.display = isRemote ? 'flex' : 'none';
+
+    // Reset inputs and dropzones on mode change to prevent accidental wrong-mode processing
+    const inputIds = ['unlockPath', 'mergePathsInput', 'compressPath', 'splitPath', 'rotatePath', 'toImagesPath'];
+    inputIds.forEach(id => {
+      const el = $(id);
+      if (el) el.value = '';
+    });
+    mergePaths.length = 0;
+    renderMergeList();
+    imagePaths.length = 0;
+    renderImageList();
   }
 
   const pdfTimers = {};
 
   function savePdfLastResult(panelId, data) {
     try {
+      const expiresAt = data.expiresAt || (Date.now() + 30 * 60 * 1000);
+      data.expiresAt = expiresAt;
       localStorage.setItem('ffstudio_pdf_last_result', JSON.stringify({
         panelId,
         data,
-        expiresAt: Date.now() + 30 * 60 * 1000
+        expiresAt
       }));
     } catch (e) {}
   }
@@ -250,6 +298,7 @@
       if (item && item.expiresAt > Date.now() && item.panelId && item.data) {
         const container = $(item.panelId);
         if (container) {
+          item.data.expiresAt = item.expiresAt;
           renderResult(container, item.data);
         }
       } else {
@@ -268,6 +317,10 @@
     if (valid.length === 0) {
       showToast(isImageTarget ? 'Please select valid JPG or PNG images.' : 'Please select valid PDF files.', 'warning');
       return;
+    }
+
+    if (valid.length < fileList.length) {
+      showToast(`${fileList.length - valid.length} invalid file(s) were skipped.`, 'warning');
     }
 
     const totalBytes = valid.reduce((acc, f) => acc + f.size, 0);
@@ -332,6 +385,7 @@
     });
 
     xhr.open('POST', '/api/upload');
+    xhr.setRequestHeader('X-Session-ID', getOrCreateSessionId());
     xhr.send(formData);
   }
 
@@ -372,6 +426,37 @@
 
     const savedMode = localStorage.getItem('ffstudio_pdf_mode') || 'local';
     setPdfStorageMode(savedMode);
+
+    $('btnClearPdfSession')?.addEventListener('click', () => {
+      if (confirm('Reset your remote PDF session? This will clear active selections and stored result sessions.')) {
+        try {
+          localStorage.removeItem('ffstudio_pdf_last_result');
+          localStorage.removeItem('ffstudio_pdf_timer_unlock');
+          localStorage.removeItem('ffstudio_pdf_timer_merge');
+          localStorage.removeItem('ffstudio_pdf_timer_compress');
+          localStorage.removeItem('ffstudio_pdf_timer_split');
+          localStorage.removeItem('ffstudio_pdf_timer_rotate');
+          localStorage.removeItem('ffstudio_pdf_timer_images');
+          localStorage.removeItem('ffstudio_pdf_timer_toimages');
+          localStorage.removeItem('ffstudio_session_id');
+        } catch (e) {}
+        Object.values(pdfTimers).forEach((t) => t.clear());
+        const inputIds = ['unlockPath', 'mergePathsInput', 'compressPath', 'splitPath', 'rotatePath', 'toImagesPath'];
+        inputIds.forEach((id) => {
+          const el = $(id);
+          if (el) el.value = '';
+        });
+        mergePaths.length = 0;
+        renderMergeList();
+        imagePaths.length = 0;
+        renderImageList();
+        document.querySelectorAll('.pdf-result').forEach((el) => {
+          el.innerHTML = '';
+          el.style.display = 'none';
+        });
+        showToast('PDF session reset successfully.', 'info');
+      }
+    });
 
     document.querySelectorAll('.upload-dropzone').forEach((dropzone) => {
       const fileInput = dropzone.querySelector('.pdf-remote-input');
@@ -539,7 +624,8 @@
         timerBox.className = 'countdown-timer-box';
         timerBox.style.marginBottom = '12px';
         shell.body.appendChild(timerBox);
-        const expiresAt = Date.now() + 30 * 60 * 1000;
+        const expiresAt = data.expiresAt || (Date.now() + 30 * 60 * 1000);
+        data.expiresAt = expiresAt;
         const outTimer = new AutoCleanupTimer(timerBox, 'ffstudio_pdf_output_' + (container.id || 'single'));
         outTimer.start(expiresAt, 'Output file will be deleted in');
       }

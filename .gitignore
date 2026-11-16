@@ -1,0 +1,12 @@
+node_modules/
+temp_uploads/*
+!temp_uploads/.gitkeep
+temp_pdf_uploads/*
+!temp_pdf_uploads/.gitkeep
+processed/*
+!processed/.gitkeep
+pdf_outputs/*
+!pdf_outputs/.gitkeep
+temp_thumbs/*
+!temp_thumbs/.gitkeep
+*.log

@@ -123,6 +123,10 @@
           </div>
 
           <div id="imageRemoteSection" style="display:none; margin-bottom: 16px;">
+            <div class="banner" style="margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between;">
+              <span class="banner-text">🌐 <strong>Remote Session:</strong> Uploaded images and converted files are scoped to your session and auto-deleted from the server after 30 minutes.</span>
+              <button type="button" class="btn btn-ghost" id="btnClearImageSession" style="white-space: nowrap; font-size: 0.78rem; padding: 4px 10px;">Reset Session</button>
+            </div>
             <div class="upload-dropzone" id="imageDropzone">
               <input type="file" id="imageFileInput" accept="image/*,.jpg,.jpeg,.png,.webp,.avif,.tif,.tiff" multiple>
               <div class="dropzone-icon">
