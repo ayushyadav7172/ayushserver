@@ -193,6 +193,47 @@ const BROWSE_FILTERS = {
   'pdf-image': new Set([...PDF_EXTS, ...IMAGE_EXTS])
 };
 
+// Formats the Media Studio can safely name/mux. Keeping this list tight is
+// what stops a crafted `format` value from injecting path separators into the
+// output filename (and escaping the allowed storage roots).
+const SUPPORTED_OUTPUT_FORMATS = new Set([
+  'mp4', 'mkv', 'webm', 'avi', 'mov', 'm4v', 'ts', '3gp', 'gif',
+  'mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg', 'opus'
+]);
+
+// Extensions that the generic /api/download route may serve. Used only when a
+// caller provides an explicit `?path=` override (direct-path outputs).
+const DOWNLOADABLE_EXTS = new Set([
+  ...ALLOWED_MEDIA_EXTS,
+  ...IMAGE_STUDIO_EXTS,
+  '.gif', '.webp', '.avif', '.tif', '.tiff',
+  '.flv', '.wmv', '.mpg', '.mpeg', '.vob', '.ogv',
+  '.wma', '.aiff', '.alac', '.amr', '.3g2'
+]);
+
+function normalizeOutputFormatName(value) {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim().toLowerCase().replace(/^\./, '');
+  if (!raw) return null;
+  if (!/^[a-z0-9]{1,5}$/.test(raw) || !SUPPORTED_OUTPUT_FORMATS.has(raw)) {
+    throw createHttpError(400, `Unsupported output format "${String(value).trim()}".`);
+  }
+  return raw;
+}
+
+function buildOutputDownloadUrl(filePath) {
+  const resolved = path.resolve(String(filePath));
+  const parent = path.dirname(resolved);
+  const filename = path.basename(resolved);
+  const isRootedInDownloadDir = [PROCESSED_DIR, TEMP_UPLOADS_DIR, PDF_OUTPUTS_DIR, PDF_TEMP_UPLOADS_DIR]
+    .filter(Boolean)
+    .some(dir => path.resolve(dir) === parent);
+  if (isRootedInDownloadDir) {
+    return `/api/download/${encodeURIComponent(filename)}`;
+  }
+  return `/api/download/${encodeURIComponent(filename)}?path=${encodeURIComponent(resolved)}`;
+}
+
 // In-memory job store & SSE subscribers
 const jobs = new Map();
 const sseSubscribers = new Map();
@@ -206,6 +247,11 @@ let zombieInactivityTimer = null;
 // FFmpeg emits progress lines roughly twice a second, so total silence means
 // the process is hung (or waiting on a blocked read) and should be reclaimed.
 const JOB_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+// PDF/Image locks are not heartbeat-monitored, so a long batch can easily
+// exceed the old 10-minute assumption. Keep a generous ceiling that still
+// recovers from a genuinely crashed handler.
+const STALE_LOCK_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 // Global Active Job State (Preserved across browser refreshes)
 let activeJob = {
@@ -274,19 +320,37 @@ const concurrencyLock = {
     startedAt: null,
     activeFiles: new Set()
   },
+  removeFile(filePath) {
+    if (!filePath || typeof filePath !== 'string') return;
+    try {
+      const resolved = path.resolve(filePath);
+      if (this.pdfJob && this.pdfJob.activeFiles) this.pdfJob.activeFiles.delete(resolved);
+      if (this.imageJob && this.imageJob.activeFiles) this.imageJob.activeFiles.delete(resolved);
+    } catch (e) {}
+  },
   isMediaProcessing() {
     return Boolean(activeJob && activeJob.status === 'processing');
   },
   acquireMediaLock() {
     if (this.pdfJob.isProcessing) {
-      const err = new Error(`A PDF operation (${this.pdfJob.tool}) is currently running. Please wait for it to finish.`);
-      err.status = 409;
-      throw err;
+      if (this.pdfJob.startedAt && (Date.now() - this.pdfJob.startedAt > STALE_LOCK_TIMEOUT_MS)) {
+        console.warn(`[ConcurrencyLock] Auto-releasing stale PDF lock for ${this.pdfJob.tool} (>30m)`);
+        this.releasePdfLock();
+      } else {
+        const err = new Error(`A PDF operation (${this.pdfJob.tool}) is currently running. Please wait for it to finish.`);
+        err.status = 409;
+        throw err;
+      }
     }
     if (this.imageJob.isProcessing) {
-      const err = new Error(`An image operation (${this.imageJob.operation}) is currently running. Please wait for it to finish.`);
-      err.status = 409;
-      throw err;
+      if (this.imageJob.startedAt && (Date.now() - this.imageJob.startedAt > STALE_LOCK_TIMEOUT_MS)) {
+        console.warn(`[ConcurrencyLock] Auto-releasing stale image lock for ${this.imageJob.operation} (>30m)`);
+        this.releaseImageLock();
+      } else {
+        const err = new Error(`An image operation (${this.imageJob.operation}) is currently running. Please wait for it to finish.`);
+        err.status = 409;
+        throw err;
+      }
     }
     if (this.isMediaProcessing()) {
       const err = new Error('A media conversion process is already running. Please wait for it to finish or cancel it.');
@@ -301,14 +365,24 @@ const concurrencyLock = {
       throw err;
     }
     if (this.imageJob.isProcessing) {
-      const err = new Error(`An image operation (${this.imageJob.operation}) is currently running. Please wait for it to finish.`);
-      err.status = 409;
-      throw err;
+      if (this.imageJob.startedAt && (Date.now() - this.imageJob.startedAt > STALE_LOCK_TIMEOUT_MS)) {
+        console.warn(`[ConcurrencyLock] Auto-releasing stale image lock for ${this.imageJob.operation} (>30m)`);
+        this.releaseImageLock();
+      } else {
+        const err = new Error(`An image operation (${this.imageJob.operation}) is currently running. Please wait for it to finish.`);
+        err.status = 409;
+        throw err;
+      }
     }
     if (this.pdfJob.isProcessing) {
-      const err = new Error(`Another PDF operation (${this.pdfJob.tool}) is currently running. Please wait for it to finish.`);
-      err.status = 409;
-      throw err;
+      if (this.pdfJob.startedAt && (Date.now() - this.pdfJob.startedAt > STALE_LOCK_TIMEOUT_MS)) {
+        console.warn(`[ConcurrencyLock] Auto-releasing stale PDF lock for ${this.pdfJob.tool} (>30m)`);
+        this.releasePdfLock();
+      } else {
+        const err = new Error(`Another PDF operation (${this.pdfJob.tool}) is currently running. Please wait for it to finish.`);
+        err.status = 409;
+        throw err;
+      }
     }
     this.pdfJob.isProcessing = true;
     this.pdfJob.tool = toolName;
@@ -322,14 +396,24 @@ const concurrencyLock = {
       throw err;
     }
     if (this.pdfJob.isProcessing) {
-      const err = new Error(`A PDF operation (${this.pdfJob.tool}) is currently running. Please wait for it to finish.`);
-      err.status = 409;
-      throw err;
+      if (this.pdfJob.startedAt && (Date.now() - this.pdfJob.startedAt > STALE_LOCK_TIMEOUT_MS)) {
+        console.warn(`[ConcurrencyLock] Auto-releasing stale PDF lock for ${this.pdfJob.tool} (>30m)`);
+        this.releasePdfLock();
+      } else {
+        const err = new Error(`A PDF operation (${this.pdfJob.tool}) is currently running. Please wait for it to finish.`);
+        err.status = 409;
+        throw err;
+      }
     }
     if (this.imageJob.isProcessing) {
-      const err = new Error('Another image operation is currently running. Please wait for it to finish.');
-      err.status = 409;
-      throw err;
+      if (this.imageJob.startedAt && (Date.now() - this.imageJob.startedAt > STALE_LOCK_TIMEOUT_MS)) {
+        console.warn(`[ConcurrencyLock] Auto-releasing stale image lock for ${this.imageJob.operation} (>30m)`);
+        this.releaseImageLock();
+      } else {
+        const err = new Error('Another image operation is currently running. Please wait for it to finish.');
+        err.status = 409;
+        throw err;
+      }
     }
     this.imageJob.isProcessing = true;
     this.imageJob.operation = operationName;
@@ -356,12 +440,37 @@ function scheduleActiveJobReset(delayMs = 60000) {
     // Only reset if the job is no longer processing (don't reset a new running job)
     if (activeJob.status !== 'processing') {
       activeJob.status = 'idle';
+      activeJob.filePath = '';
+      activeJob.outputPath = '';
     }
   }, delayMs);
 }
 
 // ==================== AUTO-CLEANUP & STORAGE LIFECYCLE (30 MIN) ====================
 const THIRTY_MINUTES_MS = 30 * 60 * 1000;
+
+function isFileBeingWritten(filePath, initialStats) {
+  if (!filePath) return false;
+  try {
+    const s1 = initialStats || fs.statSync(filePath);
+    if (s1.isDirectory()) return false;
+    // If modified within the last 15 seconds, it is actively being written
+    if (Date.now() - (s1.mtimeMs || 0) < 15000) {
+      return true;
+    }
+    // Check if file size or mtime changes over a tiny 50ms window
+    const size1 = s1.size;
+    const mtime1 = s1.mtimeMs;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    const s2 = fs.statSync(filePath);
+    if (s2.size !== size1 || s2.mtimeMs !== mtime1) {
+      return true;
+    }
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
 
 function isFileInActiveProcessing(filePath) {
   if (!filePath || typeof filePath !== 'string') return false;
@@ -372,15 +481,30 @@ function isFileInActiveProcessing(filePath) {
     return false;
   }
 
+  const now = Date.now();
+  const MAX_JOB_AGE_MS = 15 * 60 * 1000; // 15 minutes max active processing time
+
   // 1. Check global activeJob (Media Studio)
   if (activeJob && activeJob.status === 'processing') {
-    if (activeJob.filePath && path.resolve(activeJob.filePath) === target) return true;
-    if (activeJob.outputPath && path.resolve(activeJob.outputPath) === target) return true;
+    if (!currentFFmpegProcess && activeJob.startedAt && (now - activeJob.startedAt > MAX_JOB_AGE_MS)) {
+      activeJob.status = 'failed';
+      activeJob.filePath = '';
+      activeJob.outputPath = '';
+    } else {
+      if (activeJob.filePath && path.resolve(activeJob.filePath) === target) return true;
+      if (activeJob.outputPath && path.resolve(activeJob.outputPath) === target) return true;
+    }
   }
 
   // 2. Check all jobs in store (Media Studio jobs)
   for (const job of jobs.values()) {
     if (job && job.status === 'processing') {
+      const jobAge = now - (job.startedAt || job.createdAt || now);
+      if (jobAge > MAX_JOB_AGE_MS) {
+        job.status = 'failed';
+        job.error = 'Job timed out in processing state';
+        continue;
+      }
       if (job.filePath && path.resolve(job.filePath) === target) return true;
       if (job.outputPath && path.resolve(job.outputPath) === target) return true;
       if (Array.isArray(job.inputPaths)) {
@@ -393,14 +517,20 @@ function isFileInActiveProcessing(filePath) {
 
   // 3. Check PDF active operations
   if (concurrencyLock.pdfJob && concurrencyLock.pdfJob.isProcessing) {
-    if (concurrencyLock.pdfJob.activeFiles && concurrencyLock.pdfJob.activeFiles.has(target)) {
+    if (concurrencyLock.pdfJob.startedAt && (now - concurrencyLock.pdfJob.startedAt > STALE_LOCK_TIMEOUT_MS)) {
+      console.warn(`[Auto-Cleanup] Auto-releasing stale PDF lock for ${concurrencyLock.pdfJob.tool} (>30m)`);
+      concurrencyLock.releasePdfLock();
+    } else if (concurrencyLock.pdfJob.activeFiles && concurrencyLock.pdfJob.activeFiles.has(target)) {
       return true;
     }
   }
 
   // 4. Check Image active operations
   if (concurrencyLock.imageJob && concurrencyLock.imageJob.isProcessing) {
-    if (concurrencyLock.imageJob.activeFiles && concurrencyLock.imageJob.activeFiles.has(target)) {
+    if (concurrencyLock.imageJob.startedAt && (now - concurrencyLock.imageJob.startedAt > STALE_LOCK_TIMEOUT_MS)) {
+      console.warn(`[Auto-Cleanup] Auto-releasing stale image lock for ${concurrencyLock.imageJob.operation} (>30m)`);
+      concurrencyLock.releaseImageLock();
+    } else if (concurrencyLock.imageJob.activeFiles && concurrencyLock.imageJob.activeFiles.has(target)) {
       return true;
     }
   }
@@ -442,11 +572,17 @@ function cleanDirectory(dirPath, isTempUploads = false) {
       }
 
       const ageMs = now - stats.mtimeMs;
+
       if (ageMs > THIRTY_MINUTES_MS) {
         // Skip files that are actively being read or written by any job
         if (isFileInActiveProcessing(fullPath)) {
-          console.log(`[Auto-Cleanup] Skipping active file (${entry}) in ${path.basename(dirPath)}.`);
-          continue;
+          // Fallback: If a file is older than 30 minutes, it should be deleted EVEN IF it thinks it's processing,
+          // UNLESS the file is currently being written to (which is rare).
+          if (isFileBeingWritten(fullPath, stats)) {
+            console.log(`[Auto-Cleanup] Skipping active file currently being written (${entry}) in ${path.basename(dirPath)}.`);
+            continue;
+          }
+          console.warn(`[Auto-Cleanup] File (${entry}) was marked active but is older than 30m and not being written to; forcing deletion.`);
         }
 
         try {
@@ -458,7 +594,7 @@ function cleanDirectory(dirPath, isTempUploads = false) {
             console.log(`[Auto-Cleanup] Deleted expired file (${Math.round(ageMs / 60000)}m old): ${entry}`);
           }
         } catch (delErr) {
-          console.warn(`[Auto-Cleanup] Failed to delete ${fullPath}:`, delErr.message);
+          console.error('[Cleanup Failed]', fullPath, delErr);
         }
       }
     }
@@ -468,11 +604,16 @@ function cleanDirectory(dirPath, isTempUploads = false) {
 }
 
 function runAutoCleanup() {
-  cleanDirectory(TEMP_UPLOADS_DIR, true);
-  cleanDirectory(PDF_TEMP_UPLOADS_DIR, true);
-  cleanDirectory(PROCESSED_DIR, false);
-  cleanDirectory(PDF_OUTPUTS_DIR, false);
-  cleanDirectory(THUMBS_DIR, false);
+  console.log('[Cleanup] Running periodic sweep...');
+  try {
+    cleanDirectory(TEMP_UPLOADS_DIR, true);
+    cleanDirectory(PDF_TEMP_UPLOADS_DIR, true);
+    cleanDirectory(PROCESSED_DIR, false);
+    cleanDirectory(PDF_OUTPUTS_DIR, false);
+    cleanDirectory(THUMBS_DIR, false);
+  } catch (err) {
+    console.error('[Cleanup] Periodic sweep encountered an error:', err);
+  }
 }
 
 // Rule E: Server Restart - cleanup script runs once on server startup
@@ -1787,6 +1928,12 @@ function executeJob(job) {
       job.completedAt = Date.now();
       activeJob.status = 'failed';
       activeJob.error = spawnErr.message;
+      activeJob.filePath = '';
+      activeJob.outputPath = '';
+      if (concurrencyLock && concurrencyLock.removeFile) {
+        concurrencyLock.removeFile(job.filePath);
+        concurrencyLock.removeFile(job.outputPath);
+      }
       cleanupTempUploadsOnError(job.filePath, ...(job.inputPaths || []));
       notifyJobSubscribers(job.id, {
         type: 'status',
@@ -1904,6 +2051,12 @@ function executeJob(job) {
       clearWatchdog();
       currentFFmpegProcess = null;
       if (job.status === 'cancelled' || activeJob.status === 'cancelled') {
+        activeJob.filePath = '';
+        activeJob.outputPath = '';
+        if (concurrencyLock && concurrencyLock.removeFile) {
+          concurrencyLock.removeFile(job.filePath);
+          concurrencyLock.removeFile(job.outputPath);
+        }
         resolve(job);
         return;
       }
@@ -1920,6 +2073,12 @@ function executeJob(job) {
 
       activeJob.status = 'failed';
       activeJob.error = err.message;
+      activeJob.filePath = '';
+      activeJob.outputPath = '';
+      if (concurrencyLock && concurrencyLock.removeFile) {
+        concurrencyLock.removeFile(job.filePath);
+        concurrencyLock.removeFile(job.outputPath);
+      }
 
       notifyJobSubscribers(job.id, {
         type: 'status',
@@ -1942,148 +2101,190 @@ function executeJob(job) {
         // Settle the promise so cancelled jobs do not leak a permanently
         // pending promise (and its captured job state).
         job._settled = true;
+        activeJob.filePath = '';
+        activeJob.outputPath = '';
+        if (concurrencyLock && concurrencyLock.removeFile) {
+          concurrencyLock.removeFile(job.filePath);
+          concurrencyLock.removeFile(job.outputPath);
+        }
         resolve(job);
         return;
       }
 
-      job.completedAt = Date.now();
-      job.durationMs = job.completedAt - job.startedAt;
+      try {
+        job.completedAt = Date.now();
+        job.durationMs = job.completedAt - job.startedAt;
 
-      // Check if candidate output file exists
-      let resolvedOutput = job.outputPath;
-      if (!resolvedOutput || !fs.existsSync(resolvedOutput)) {
-        if (job.isCustom && Array.isArray(job.execArgs)) {
-          const detected = detectOutputPathFromArgv(job.execArgs, job.workingDir || workingDir);
-          if (detected && isPathAllowed(detected) && fs.existsSync(detected)) {
-            resolvedOutput = detected;
-            job.outputPath = detected;
-            activeJob.outputPath = detected;
+        // Check if candidate output file exists
+        let resolvedOutput = job.outputPath;
+        if (!resolvedOutput || !fs.existsSync(resolvedOutput)) {
+          if (job.isCustom && Array.isArray(job.execArgs)) {
+            const detected = detectOutputPathFromArgv(job.execArgs, job.workingDir || workingDir);
+            if (detected && isPathAllowed(detected) && fs.existsSync(detected)) {
+              resolvedOutput = detected;
+              job.outputPath = detected;
+              activeJob.outputPath = detected;
+            }
           }
         }
-      }
 
-      const fileExists = Boolean(resolvedOutput && fs.existsSync(resolvedOutput));
+        const fileExists = Boolean(resolvedOutput && fs.existsSync(resolvedOutput));
 
-      if (code === 0 && (fileExists || (job.isCustom && !job.outputPath))) {
-        job.status = 'completed';
-        job.progress.percent = 100;
+        if (code === 0 && (fileExists || (job.isCustom && !job.outputPath))) {
+          job.status = 'completed';
+          job.progress.percent = 100;
 
-        activeJob.status = 'completed';
-        activeJob.progress = 100;
-        activeJob.currentTime = activeJob.totalDuration;
+          activeJob.status = 'completed';
+          activeJob.progress = 100;
+          activeJob.currentTime = activeJob.totalDuration;
 
-        if (fileExists) {
-          const stat = fs.statSync(resolvedOutput);
-          const meta = await probeMedia(resolvedOutput).catch(() => null);
+          if (fileExists) {
+            const stat = fs.statSync(resolvedOutput);
+            const meta = await probeMedia(resolvedOutput).catch(() => null);
 
-          job.outputFile = {
-            filename: path.basename(resolvedOutput),
-            path: resolvedOutput,
-            isDirectPath: true,
-            size: stat.size,
-            sizeFormatted: formatBytes(stat.size),
-            previewUrl: `/api/stream-file?path=${encodeURIComponent(resolvedOutput)}`,
-            downloadUrl: `/api/download/${encodeURIComponent(path.basename(resolvedOutput))}`,
-            metadata: meta,
-            expiresAt: Date.now() + (30 * 60 * 1000)
-          };
-          activeJob.outputFile = job.outputFile;
-        }
+            job.outputFile = {
+              filename: path.basename(resolvedOutput),
+              path: resolvedOutput,
+              isDirectPath: true,
+              size: stat.size,
+              sizeFormatted: formatBytes(stat.size),
+              previewUrl: `/api/stream-file?path=${encodeURIComponent(resolvedOutput)}`,
+              downloadUrl: `/api/download/${encodeURIComponent(path.basename(resolvedOutput))}`,
+              metadata: meta,
+              expiresAt: Date.now() + (30 * 60 * 1000)
+            };
+            activeJob.outputFile = job.outputFile;
+          }
 
-        notifyJobSubscribers(job.id, {
-          type: 'status',
-          status: 'completed',
-          jobId: job.id,
-          isDirectPath: true,
-          progress: 100,
-          currentTime: activeJob.totalDuration,
-          totalDuration: activeJob.totalDuration,
-          speed: activeJob.speed,
-          activeJob,
-          outputFile: job.outputFile
-        });
-        scheduleActiveJobReset();
-        job._settled = true;
-        resolve(job);
-      } else {
-        const isHwAccelError = Boolean(job.options && (job.options.hardwareAccel || job.options.fastMode)) &&
-          (rawStderr.includes('h264_mediacodec') || rawStderr.includes('MediaCodec') || rawStderr.includes('Operation not permitted') || rawStderr.includes('Device does not support'));
-
-        if (isHwAccelError && !job.hasFallenBackToSoftware) {
-          console.warn('[HW Accel Fallback] Hardware encoder failed, falling back to software encoding (libx264)...');
-          job.hasFallenBackToSoftware = true;
-          job.options.hardwareAccel = false;
-          job.options.fastMode = false;
+          // Active processing has settled: release locks immediately
+          activeJob.filePath = '';
+          activeJob.outputPath = '';
+          if (concurrencyLock && concurrencyLock.removeFile) {
+            concurrencyLock.removeFile(job.filePath);
+            concurrencyLock.removeFile(job.outputPath);
+            if (Array.isArray(job.inputPaths)) {
+              for (const p of job.inputPaths) concurrencyLock.removeFile(p);
+            }
+          }
 
           notifyJobSubscribers(job.id, {
             type: 'status',
-            status: 'warning',
-            message: 'Hardware acceleration not supported on this device, falling back to software encoding.',
-            jobId: job.id
+            status: 'completed',
+            jobId: job.id,
+            isDirectPath: true,
+            progress: 100,
+            currentTime: activeJob.totalDuration,
+            totalDuration: activeJob.totalDuration,
+            speed: activeJob.speed,
+            activeJob,
+            outputFile: job.outputFile
           });
+          scheduleActiveJobReset();
+          job._settled = true;
+          resolve(job);
+        } else {
+          const isHwAccelError = Boolean(job.options && (job.options.hardwareAccel || job.options.fastMode)) &&
+            (rawStderr.includes('h264_mediacodec') || rawStderr.includes('MediaCodec') || rawStderr.includes('Operation not permitted') || rawStderr.includes('Device does not support'));
 
-          // Rebuild args using software libx264
-          const resolvedPath = job.inputPaths[0];
-          const fallbackArgs = buildDynamicFfmpegArgs({
-            inputPath: resolvedPath,
-            operations: { ...job.options, hardwareAccel: false, fastMode: false },
-            audioTracks: job.options.audioTracks || [],
-            subtitleConfig: job.options.subtitleConfig || {},
-            outputPath: job.outputPath,
-            mediaInfo: job.meta || {},
-            isLosslessCopy: false
+          if (isHwAccelError && !job.hasFallenBackToSoftware) {
+            console.warn('[HW Accel Fallback] Hardware encoder failed, falling back to software encoding (libx264)...');
+            job.hasFallenBackToSoftware = true;
+            job.options.hardwareAccel = false;
+            job.options.fastMode = false;
+
+            notifyJobSubscribers(job.id, {
+              type: 'status',
+              status: 'warning',
+              message: 'Hardware acceleration not supported on this device, falling back to software encoding.',
+              jobId: job.id
+            });
+
+            // Rebuild args using software libx264
+            const resolvedPath = job.inputPaths[0];
+            const fallbackArgs = buildDynamicFfmpegArgs({
+              inputPath: resolvedPath,
+              operations: { ...job.options, hardwareAccel: false, fastMode: false },
+              audioTracks: job.options.audioTracks || [],
+              subtitleConfig: job.options.subtitleConfig || {},
+              outputPath: job.outputPath,
+              mediaInfo: job.meta || {},
+              isLosslessCopy: false
+            });
+            job.executable = 'ffmpeg';
+            job.execArgs = fallbackArgs;
+            job.commandString = buildSafeFfmpegCommand(fallbackArgs, resolvedPath, job.outputPath, 'ffmpeg');
+            activeJob.commandString = job.commandString;
+
+            return executeJob(job).then(resolve).catch(reject);
+          }
+
+          job._settled = true;
+          job.status = 'failed';
+          job.stderr = rawStderr.slice(-4000);
+
+          // Clean up partial output file on error/failure
+          if (job.outputPath && fs.existsSync(job.outputPath)) {
+            try {
+              fs.unlinkSync(job.outputPath);
+              console.log(`[FFmpeg Execution] Cleaned up partial output file after failure: ${job.outputPath}`);
+            } catch (unlinkErr) {
+              console.warn(`[FFmpeg Execution] Could not remove partial output file ${job.outputPath}:`, unlinkErr.message);
+            }
+          }
+          cleanupTempUploadsOnError(job.filePath, ...(job.inputPaths || []));
+
+          const isDirectCopy = (job.commandString && job.commandString.includes('-c:v copy')) ||
+                               Boolean(job.options?.isLosslessCopy || (job.options?.operations && job.options?.operations?.isLosslessCopy));
+
+          if (job.timedOut) {
+            job.error = `Command produced no output for ${Math.round(JOB_INACTIVITY_TIMEOUT_MS / 60000)} minutes and was stopped. It may be waiting for input or stuck.`;
+          } else if (job.isCustom) {
+            const extractedErr = extractFfmpegError(rawStderr);
+            job.error = extractedErr || `Custom command failed with exit code ${code}`;
+          } else if (isDirectCopy) {
+            job.error = 'Direct copy failed. The source file has codecs not supported by MP4. Please try Re-encoding.';
+          } else {
+            job.error = `FFmpeg exited with error code ${code}`;
+          }
+
+          activeJob.status = 'failed';
+          activeJob.error = job.error;
+          activeJob.filePath = '';
+          activeJob.outputPath = '';
+          if (concurrencyLock && concurrencyLock.removeFile) {
+            concurrencyLock.removeFile(job.filePath);
+            concurrencyLock.removeFile(job.outputPath);
+            if (Array.isArray(job.inputPaths)) {
+              for (const p of job.inputPaths) concurrencyLock.removeFile(p);
+            }
+          }
+
+          notifyJobSubscribers(job.id, {
+            type: 'status',
+            status: 'failed',
+            jobId: job.id,
+            isDirectPath: true,
+            error: job.error,
+            activeJob,
+            stderr: job.stderr
           });
-          job.executable = 'ffmpeg';
-          job.execArgs = fallbackArgs;
-          job.commandString = buildSafeFfmpegCommand(fallbackArgs, resolvedPath, job.outputPath, 'ffmpeg');
-          activeJob.commandString = job.commandString;
-
-          return executeJob(job).then(resolve).catch(reject);
+          scheduleActiveJobReset();
+          reject(new Error(job.error));
         }
-
+      } catch (closeErr) {
         job._settled = true;
         job.status = 'failed';
-        job.stderr = rawStderr.slice(-4000);
-
-        // Clean up partial output file on error/failure
-        if (job.outputPath && fs.existsSync(job.outputPath)) {
-          try {
-            fs.unlinkSync(job.outputPath);
-            console.log(`[FFmpeg Execution] Cleaned up partial output file after failure: ${job.outputPath}`);
-          } catch (unlinkErr) {
-            console.warn(`[FFmpeg Execution] Could not remove partial output file ${job.outputPath}:`, unlinkErr.message);
-          }
-        }
-        cleanupTempUploadsOnError(job.filePath, ...(job.inputPaths || []));
-
-        const isDirectCopy = (job.commandString && job.commandString.includes('-c:v copy')) ||
-                             Boolean(job.options?.isLosslessCopy || (job.options?.operations && job.options?.operations?.isLosslessCopy));
-
-        if (job.timedOut) {
-          job.error = `Command produced no output for ${Math.round(JOB_INACTIVITY_TIMEOUT_MS / 60000)} minutes and was stopped. It may be waiting for input or stuck.`;
-        } else if (job.isCustom) {
-          const extractedErr = extractFfmpegError(rawStderr);
-          job.error = extractedErr || `Custom command failed with exit code ${code}`;
-        } else if (isDirectCopy) {
-          job.error = 'Direct copy failed. The source file has codecs not supported by MP4. Please try Re-encoding.';
-        } else {
-          job.error = `FFmpeg exited with error code ${code}`;
-        }
-
+        job.error = closeErr.message;
         activeJob.status = 'failed';
-        activeJob.error = job.error;
-
-        notifyJobSubscribers(job.id, {
-          type: 'status',
-          status: 'failed',
-          jobId: job.id,
-          isDirectPath: true,
-          error: job.error,
-          activeJob,
-          stderr: job.stderr
-        });
+        activeJob.error = closeErr.message;
+        activeJob.filePath = '';
+        activeJob.outputPath = '';
+        if (concurrencyLock && concurrencyLock.removeFile) {
+          concurrencyLock.removeFile(job.filePath);
+          concurrencyLock.removeFile(job.outputPath);
+        }
         scheduleActiveJobReset();
-        reject(new Error(job.error));
+        reject(closeErr);
       }
     });
   });
@@ -3416,18 +3617,23 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
   activeJob.filename = req.body?.filePath ? path.basename(req.body.filePath) : '';
   activeJob.progress = 0;
   activeJob.error = null;
+  activeJob.startedAt = Date.now();
 
   try {
     const { filePath, operation, options = {}, operations, audioTracks, subtitleConfig, hardwareAccel, isLosslessCopy, muteAudio } = req.body;
 
     if (!filePath) {
       activeJob.status = 'idle';
+      activeJob.filePath = '';
+      activeJob.outputPath = '';
       return res.status(400).json({ error: 'Absolute file path is required' });
     }
 
     const resolvedPath = assertPathAllowed(filePath, 'Media file');
     if (!fs.existsSync(resolvedPath)) {
       activeJob.status = 'idle';
+      activeJob.filePath = '';
+      activeJob.outputPath = '';
       return res.status(404).json({ error: `File not found on storage: ${filePath}` });
     }
 
@@ -3461,6 +3667,8 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
       );
       if (!hasAnyOperation) {
         activeJob.status = 'idle';
+        activeJob.filePath = '';
+        activeJob.outputPath = '';
         return res.status(400).json({ error: 'Select at least one operation (Convert, Compress/Resize, Trim, or Extract audio).' });
       }
 
@@ -3639,6 +3847,8 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
   } catch (err) {
     console.error('Process error:', err);
     activeJob.status = 'idle';
+    activeJob.filePath = '';
+    activeJob.outputPath = '';
     res.status(err.status || 500).json({ error: err.message });
   }
 });
@@ -3664,12 +3874,15 @@ app.post('/api/run-custom', async (req, res) => {
   activeJob.filename = req.body?.filePath ? path.basename(req.body.filePath) : '';
   activeJob.progress = 0;
   activeJob.error = null;
+  activeJob.startedAt = Date.now();
 
   try {
     const { command, filePath } = req.body || {};
 
     if (!command || typeof command !== 'string' || !command.trim()) {
       activeJob.status = 'idle';
+      activeJob.filePath = '';
+      activeJob.outputPath = '';
       return res.status(400).json({ error: 'Command string is required.' });
     }
 
@@ -3682,6 +3895,8 @@ app.post('/api/run-custom', async (req, res) => {
       resolvedPath = assertPathAllowed(filePath, 'Media file');
       if (!fs.existsSync(resolvedPath)) {
         activeJob.status = 'idle';
+        activeJob.filePath = '';
+        activeJob.outputPath = '';
         return res.status(404).json({ error: `File not found on storage: ${filePath}` });
       }
       try {
@@ -3769,6 +3984,8 @@ app.post('/api/run-custom', async (req, res) => {
   } catch (err) {
     console.error('[Run Custom] Error starting custom job:', err);
     activeJob.status = 'idle';
+    activeJob.filePath = '';
+    activeJob.outputPath = '';
     res.status(err.status || 500).json({ error: err.message });
   }
 });
@@ -3863,6 +4080,19 @@ app.post('/api/cancel-job', (req, res) => {
       message: 'Conversion cancelled by user',
       activeJob: formatJobForClient(activeJob)
     };
+
+    const cancelledFilePath = activeJob.filePath;
+    const cancelledOutputPath = activeJob.outputPath;
+    activeJob.filePath = '';
+    activeJob.outputPath = '';
+    if (concurrencyLock && concurrencyLock.removeFile) {
+      concurrencyLock.removeFile(cancelledFilePath);
+      concurrencyLock.removeFile(cancelledOutputPath);
+      if (job) {
+        concurrencyLock.removeFile(job.filePath);
+        concurrencyLock.removeFile(job.outputPath);
+      }
+    }
 
     if (targetJobId) {
       notifyJobSubscribers(targetJobId, ssePayload);
@@ -4187,15 +4417,26 @@ function getLocalIP() {
 }
 
 // Start Server
-app.listen(PORT, '0.0.0.0', () => {
-  const localIP = getLocalIP();
-  console.log('=========================================');
-  console.log('Termux Utility Studio is running!');
-  console.log(`Home:              http://localhost:${PORT}`);
-  console.log(`Media Studio:      http://localhost:${PORT}/media`);
-  console.log(`PDF & Docs Studio: http://localhost:${PORT}/pdf`);
-  console.log(`Image Studio:      http://localhost:${PORT}/image`);
-  console.log(`Network Access:    http://${localIP}:${PORT}`);
-  console.log('(Use the Network Access URL on other devices connected to the same Wi-Fi/Hotspot)');
-  console.log('=========================================');
-});
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', () => {
+    const localIP = getLocalIP();
+    console.log('=========================================');
+    console.log('Termux Utility Studio is running!');
+    console.log(`Home:              http://localhost:${PORT}`);
+    console.log(`Media Studio:      http://localhost:${PORT}/media`);
+    console.log(`PDF & Docs Studio: http://localhost:${PORT}/pdf`);
+    console.log(`Image Studio:      http://localhost:${PORT}/image`);
+    console.log(`Network Access:    http://${localIP}:${PORT}`);
+    console.log('(Use the Network Access URL on other devices connected to the same Wi-Fi/Hotspot)');
+    console.log('=========================================');
+  });
+}
+
+module.exports = {
+  app,
+  concurrencyLock,
+  isFileInActiveProcessing,
+  cleanDirectory,
+  runAutoCleanup,
+  isFileBeingWritten
+};

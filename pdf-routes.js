@@ -128,6 +128,7 @@ function createPdfRouter(deps) {
       };
       res.once('finish', release);
       res.once('close', release);
+      res.once('error', release);
       next();
     };
   }
@@ -141,7 +142,9 @@ function createPdfRouter(deps) {
   function listPathValues(value) {
     if (!value) return [];
     const values = Array.isArray(value) ? value : [value];
-    return values.filter((item) => typeof item === 'string' && item.trim());
+    return values
+      .map((item) => (typeof item === 'string' ? item.trim().replace(/^['"]|['"]$/g, '') : ''))
+      .filter(Boolean);
   }
 
   function allRequestUploads(req) {
@@ -213,7 +216,11 @@ function createPdfRouter(deps) {
     if (typeof rawPath !== 'string' || !rawPath.trim()) {
       throw createHttpError(400, `${label} path is required.`);
     }
-    const resolved = assertPathAllowed(rawPath.trim(), label);
+    let cleaned = rawPath.trim().replace(/^['"]|['"]$/g, '');
+    if (cleaned.startsWith('~')) {
+      cleaned = cleaned.replace(/^~(?=$|\/|\\)/, process.env.HOME || os.homedir());
+    }
+    const resolved = assertPathAllowed(cleaned, label);
     if (!fs.existsSync(resolved)) {
       throw createHttpError(404, `${label} was not found: ${rawPath}`);
     }
@@ -258,7 +265,11 @@ function createPdfRouter(deps) {
   }
 
   function ensureOutputDir(rawDir, fallbackDir) {
-    const chosen = rawDir || fallbackDir;
+    let chosen = String(rawDir || '').trim().replace(/^['"]|['"]$/g, '');
+    if (chosen.startsWith('~')) {
+      chosen = chosen.replace(/^~(?=$|\/|\\)/, process.env.HOME || os.homedir());
+    }
+    if (!chosen) chosen = fallbackDir;
     const resolved = assertPathAllowed(chosen, 'Output folder');
     if (fs.existsSync(resolved)) {
       if (!fs.statSync(resolved).isDirectory()) {
@@ -396,7 +407,7 @@ function createPdfRouter(deps) {
           clearTimeout(timeout);
           if (res) res.off('close', abortHandler);
 
-          if (code === 0) {
+          if (code === 0 || (command === 'qpdf' && code === 3)) {
             return resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') });
           }
 
@@ -778,13 +789,14 @@ function createPdfRouter(deps) {
 
       const fileName = path.basename(resolved);
       const encodedName = encodeURIComponent(fileName);
+      const safeAsciiName = fileName.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '\\"');
       const download = req.query.download === '1' || req.query.download === 'true';
 
       res.setHeader('Content-Type', CONTENT_TYPES[ext] || 'application/octet-stream');
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader(
         'Content-Disposition',
-        `${download ? 'attachment' : 'inline'}; filename="${encodedName}"; filename*=UTF-8''${encodedName}`
+        `${download ? 'attachment' : 'inline'}; filename="${safeAsciiName}"; filename*=UTF-8''${encodedName}`
       );
       return res.sendFile(resolved);
     } catch (err) {
@@ -841,6 +853,10 @@ function createPdfRouter(deps) {
     } catch (err) {
       removeFileQuietly(outputPath);
       throw err;
+    } finally {
+      if (concurrencyLock && concurrencyLock.pdfJob && concurrencyLock.pdfJob.activeFiles) {
+        concurrencyLock.pdfJob.activeFiles.delete(path.resolve(sourcePath));
+      }
     }
 
     res.json({
@@ -920,6 +936,11 @@ function createPdfRouter(deps) {
       removeFileQuietly(outputPath);
       throw err;
     } finally {
+      if (concurrencyLock && concurrencyLock.pdfJob && concurrencyLock.pdfJob.activeFiles) {
+        for (const s of sources) {
+          if (s.kind === 'direct' && s.path) concurrencyLock.pdfJob.activeFiles.delete(path.resolve(s.path));
+        }
+      }
       merged = null;
       if (global.gc) {
         try { global.gc(); } catch (e) {}
@@ -1102,6 +1123,9 @@ function createPdfRouter(deps) {
       removeFileQuietly(outputPath);
       throw err;
     } finally {
+      if (concurrencyLock && concurrencyLock.pdfJob && concurrencyLock.pdfJob.activeFiles && source.path) {
+        concurrencyLock.pdfJob.activeFiles.delete(path.resolve(source.path));
+      }
       for (const tempPath of tempPaths) {
         removeFileQuietly(tempPath);
       }
@@ -1129,6 +1153,9 @@ function createPdfRouter(deps) {
     let selectedPageCount = 0;
 
     try {
+      if (concurrencyLock && concurrencyLock.pdfJob && source.path) {
+        concurrencyLock.pdfJob.activeFiles.add(path.resolve(source.path));
+      }
       sourceDoc = await loadPdfDocument(bytes, source.name);
       sourcePageCount = sourceDoc.getPageCount();
       const indices = parsePageRange(rangeText, sourcePageCount);
@@ -1148,6 +1175,9 @@ function createPdfRouter(deps) {
       removeFileQuietly(outputPath);
       throw err;
     } finally {
+      if (concurrencyLock && concurrencyLock.pdfJob && concurrencyLock.pdfJob.activeFiles && source.path) {
+        concurrencyLock.pdfJob.activeFiles.delete(path.resolve(source.path));
+      }
       bytes = null;
       sourceDoc = null;
       outputDoc = null;
@@ -1188,6 +1218,9 @@ function createPdfRouter(deps) {
     let pageCount = 0;
 
     try {
+      if (concurrencyLock && concurrencyLock.pdfJob && source.path) {
+        concurrencyLock.pdfJob.activeFiles.add(path.resolve(source.path));
+      }
       pdfDoc = await loadPdfDocument(bytes, source.name);
       pageCount = pdfDoc.getPageCount();
       for (const page of pdfDoc.getPages()) {
@@ -1202,6 +1235,9 @@ function createPdfRouter(deps) {
       removeFileQuietly(outputPath);
       throw err;
     } finally {
+      if (concurrencyLock && concurrencyLock.pdfJob && concurrencyLock.pdfJob.activeFiles && source.path) {
+        concurrencyLock.pdfJob.activeFiles.delete(path.resolve(source.path));
+      }
       bytes = null;
       pdfDoc = null;
     }
@@ -1289,6 +1325,11 @@ function createPdfRouter(deps) {
       removeFileQuietly(outputPath);
       throw err;
     } finally {
+      if (concurrencyLock && concurrencyLock.pdfJob && concurrencyLock.pdfJob.activeFiles) {
+        for (const s of sources) {
+          if (s.kind === 'direct' && s.path) concurrencyLock.pdfJob.activeFiles.delete(path.resolve(s.path));
+        }
+      }
       pdfDoc = null;
     }
 
@@ -1402,6 +1443,10 @@ function createPdfRouter(deps) {
       // NOTE: Do NOT delete sourcePath here! The uploaded input file must remain in temp_uploads
       // so the user can retry without encountering a 404 error.
       throw err;
+    } finally {
+      if (concurrencyLock && concurrencyLock.pdfJob && concurrencyLock.pdfJob.activeFiles && sourcePath) {
+        concurrencyLock.pdfJob.activeFiles.delete(path.resolve(sourcePath));
+      }
     }
 
     const files = fs.readdirSync(outputDir)
@@ -1439,6 +1484,9 @@ function createPdfRouter(deps) {
   }));
 
   router.use((err, req, res, next) => {
+    if (concurrencyLock && typeof concurrencyLock.releasePdfLock === 'function') {
+      try { concurrencyLock.releasePdfLock(); } catch (e) {}
+    }
     cleanupUploads(req);
     if (res.headersSent) return next(err);
     if (err.code === 'ENOSPC' || (err.message && err.message.includes('ENOSPC'))) {

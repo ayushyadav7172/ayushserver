@@ -1,4 +1,6 @@
 node_modules/
+.env
+no/
 temp_uploads/*
 !temp_uploads/.gitkeep
 temp_pdf_uploads/*
@@ -10,3 +12,5 @@ pdf_outputs/*
 temp_thumbs/*
 !temp_thumbs/.gitkeep
 *.log
+*.tmp
+backup*.tar.gz

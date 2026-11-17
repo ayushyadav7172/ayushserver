@@ -25,11 +25,13 @@
   };
 
   function isPdfPath(filePath) {
-    return /\.pdf$/i.test(String(filePath || '').trim());
+    const s = String(filePath || '').trim().replace(/^['"]|['"]$/g, '');
+    return /\.pdf$/i.test(s);
   }
 
   function isImagePath(filePath) {
-    return /\.(jpe?g|png)$/i.test(String(filePath || '').trim());
+    const s = String(filePath || '').trim().replace(/^['"]|['"]$/g, '');
+    return /\.(jpe?g|png)$/i.test(s);
   }
 
   function baseName(filePath) {
@@ -271,7 +273,7 @@
     if (notice) notice.style.display = isRemote ? 'flex' : 'none';
 
     // Reset inputs and dropzones on mode change to prevent accidental wrong-mode processing
-    const inputIds = ['unlockPath', 'mergePathsInput', 'compressPath', 'splitPath', 'rotatePath', 'toImagesPath'];
+    const inputIds = ['unlockPath', 'mergePathInput', 'compressPath', 'splitPath', 'rotatePath', 'imagePathInput', 'toImagesPath'];
     inputIds.forEach(id => {
       const el = $(id);
       if (el) el.value = '';
@@ -315,7 +317,7 @@
 
   function uploadPdfFiles(files, targetKey, dropzone) {
     const fileList = Array.from(files || []);
-    const isImageTarget = targetKey === 'images';
+    const isImageTarget = targetKey === 'images' || targetKey === 'imagePaths';
     const valid = fileList.filter((f) => {
       return isImageTarget ? isImagePath(f.name) : isPdfPath(f.name);
     });
@@ -352,10 +354,10 @@
           showToast(`Uploaded ${data.files.length} file${data.files.length === 1 ? '' : 's'}.`, 'success');
           const expiresAt = data.files[0]?.expiresAt || (Date.now() + 30 * 60 * 1000);
 
-          if (targetKey === 'merge') {
+          if (targetKey === 'merge' || targetKey === 'mergePaths') {
             addMergePaths(data.files.map((f) => f.path));
             pdfTimers.merge?.start(expiresAt, 'Uploaded PDFs will be deleted in');
-          } else if (targetKey === 'images') {
+          } else if (targetKey === 'images' || targetKey === 'imagePaths') {
             addImagePaths(data.files.map((f) => f.path));
             pdfTimers.images?.start(expiresAt, 'Uploaded images will be deleted in');
           } else {
@@ -455,7 +457,7 @@
           localStorage.removeItem('ffstudio_session_id');
         } catch (e) {}
         Object.values(pdfTimers).forEach((t) => t.clear());
-        const inputIds = ['unlockPath', 'mergePathsInput', 'compressPath', 'splitPath', 'rotatePath', 'toImagesPath'];
+        const inputIds = ['unlockPath', 'mergePathInput', 'compressPath', 'splitPath', 'rotatePath', 'imagePathInput', 'toImagesPath'];
         inputIds.forEach((id) => {
           const el = $(id);
           if (el) el.value = '';
@@ -474,7 +476,7 @@
 
     document.querySelectorAll('.upload-dropzone').forEach((dropzone) => {
       const fileInput = dropzone.querySelector('.pdf-remote-input');
-      const targetInput = dropzone.dataset.targetInput;
+      const targetInput = dropzone.dataset.targetInput || dropzone.dataset.targetQueue;
 
       dropzone.addEventListener('dragover', (e) => {
         e.preventDefault();
@@ -714,7 +716,7 @@
   }
 
   function readSinglePath(inputId, kind, label) {
-    const value = $(inputId).value.trim();
+    let value = $(inputId).value.trim().replace(/^['"]|['"]$/g, '');
     if (!value) {
       throw new Error(`Choose a ${label} first.`);
     }
@@ -735,6 +737,14 @@
       empty.className = 'file-stack-empty';
       empty.textContent = emptyText;
       container.appendChild(empty);
+    }
+
+    if (kind === 'pdf') {
+      const clearBtn = $('btnMergeClearAll');
+      if (clearBtn) clearBtn.style.display = paths.length > 0 ? 'inline-flex' : 'none';
+    } else if (kind === 'image') {
+      const clearBtn = $('btnImageClearAll');
+      if (clearBtn) clearBtn.style.display = paths.length > 0 ? 'inline-flex' : 'none';
     }
 
     paths.forEach((filePath, index) => {
@@ -840,41 +850,51 @@
   function addMergePaths(paths) {
     let added = 0;
     let skipped = 0;
+    let duplicate = 0;
     paths.forEach((rawPath) => {
-      const filePath = String(rawPath || '').trim();
+      let filePath = String(rawPath || '').trim().replace(/^['"]|['"]$/g, '');
       if (!filePath || !isPdfPath(filePath)) {
         skipped++;
         return;
       }
-      if (mergePaths.includes(filePath)) return;
+      if (mergePaths.includes(filePath)) {
+        duplicate++;
+        return;
+      }
       mergePaths.push(filePath);
       added++;
     });
     renderMergeList();
     if (added > 0) showToast(`Added ${added} PDF${added === 1 ? '' : 's'}.`, 'success');
+    if (duplicate > 0 && added === 0) showToast('This PDF is already in the list.', 'info');
     if (skipped > 0) showToast(`${skipped} non-PDF file${skipped === 1 ? ' was' : 's were'} skipped.`, 'warning');
   }
 
   function addImagePaths(paths) {
     let added = 0;
     let skipped = 0;
+    let duplicate = 0;
     paths.forEach((rawPath) => {
-      const filePath = String(rawPath || '').trim();
+      let filePath = String(rawPath || '').trim().replace(/^['"]|['"]$/g, '');
       if (!filePath || !isImagePath(filePath)) {
         skipped++;
         return;
       }
-      if (imagePaths.includes(filePath)) return;
+      if (imagePaths.includes(filePath)) {
+        duplicate++;
+        return;
+      }
       imagePaths.push(filePath);
       added++;
     });
     renderImageList();
     if (added > 0) showToast(`Added ${added} image${added === 1 ? '' : 's'}.`, 'success');
+    if (duplicate > 0 && added === 0) showToast('This image is already in the list.', 'info');
     if (skipped > 0) showToast(`${skipped} file${skipped === 1 ? ' was' : 's were'} skipped. Only JPG/PNG is supported.`, 'warning');
   }
 
   function addPathFromInput(inputId, kind) {
-    const value = $(inputId).value.trim();
+    let value = $(inputId).value.trim().replace(/^['"]|['"]$/g, '');
     if (!value) {
       showToast('Enter an absolute file path first.', 'warning');
       return;
@@ -1105,8 +1125,20 @@
       row.addEventListener('click', () => {
         if (item.isDirectory) {
           loadDirectory(item.path);
+        } else if (explorer.mode === 'single') {
+          explorer.selected = [item];
+          confirmExplorerSelection();
         } else {
           selectExplorerItem(item);
+        }
+      });
+
+      row.addEventListener('dblclick', () => {
+        if (!item.isDirectory && explorer.mode === 'multi') {
+          if (explorerSelectionIndex(item.path) < 0) {
+            explorer.selected.push(item);
+          }
+          confirmExplorerSelection();
         }
       });
 
@@ -1388,6 +1420,11 @@
     });
 
     $('btnMergeRun').addEventListener('click', runMerge);
+    $('btnMergeClearAll')?.addEventListener('click', () => {
+      mergePaths.length = 0;
+      renderMergeList();
+      showToast('Merge list cleared.', 'info');
+    });
     renderMergeList();
   }
 
@@ -1529,6 +1566,11 @@
     });
 
     $('btnImagesRun').addEventListener('click', runImagesToPdf);
+    $('btnImageClearAll')?.addEventListener('click', () => {
+      imagePaths.length = 0;
+      renderImageList();
+      showToast('Image list cleared.', 'info');
+    });
     renderImageList();
   }
 

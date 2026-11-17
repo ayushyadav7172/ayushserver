@@ -201,7 +201,10 @@
               <h3>Documents to merge</h3>
               <p>Select two or more PDFs. Use the arrows to control their order.</p>
             </div>
-            <span class="count-badge" id="mergeCountBadge">0 files</span>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button type="button" class="btn btn-ghost btn-sm" id="btnMergeClearAll" style="display:none;padding:3px 8px;font-size:0.75rem;">Clear all</button>
+              <span class="count-badge" id="mergeCountBadge">0 files</span>
+            </div>
           </div>
 
           <div class="card-body">
@@ -217,7 +220,7 @@
             </div>
 
             <div class="pdf-remote-only" style="display:none; margin-bottom:14px;">
-              <div class="upload-dropzone" data-target-queue="merge">
+              <div class="upload-dropzone" data-target-input="merge" data-target-queue="merge">
                 <input type="file" class="pdf-remote-input" accept=".pdf" multiple>
                 <div class="dropzone-icon">
                   <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
@@ -521,7 +524,10 @@
               <h3>Images for the document</h3>
               <p>Select one or more JPG/PNG images from phone storage.</p>
             </div>
-            <span class="count-badge" id="imageCountBadge">0 images</span>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button type="button" class="btn btn-ghost btn-sm" id="btnImageClearAll" style="display:none;padding:3px 8px;font-size:0.75rem;">Clear all</button>
+              <span class="count-badge" id="imageCountBadge">0 images</span>
+            </div>
           </div>
 
           <div class="card-body">
