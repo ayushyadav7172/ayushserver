@@ -12,6 +12,7 @@ const os = require('os');
 const sharp = require('sharp');
 const multer = require('multer');
 const { createPdfRouter } = require('./pdf-routes');
+const { wakeLockManager } = require('./wake-lock');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -120,18 +121,8 @@ function getAllowedRootsForUi() {
   });
 }
 
-// Termux Wake Lock: Prevents Android from sleeping CPU during heavy FFmpeg tasks
-try {
-  exec('termux-wake-lock', (err) => {
-    if (err) {
-      console.log('[Wake Lock] termux-wake-lock notice:', err.message);
-    } else {
-      console.log('[Wake Lock] Acquired termux-wake-lock to keep CPU awake during tasks.');
-    }
-  });
-} catch (e) {
-  console.warn('[Wake Lock] Exception acquiring wake lock:', e.message);
-}
+// Termux Wake Lock: Acquired on-demand ONLY when heavy tasks (FFmpeg, qpdf, sharp)
+// are actively running, and released immediately when finished (via wakeLockManager).
 
 // Middleware
 app.use(cors());
@@ -388,6 +379,7 @@ const concurrencyLock = {
     this.pdfJob.tool = toolName;
     this.pdfJob.startedAt = Date.now();
     this.pdfJob.activeFiles.clear();
+    this._pdfWakeLock = wakeLockManager.acquire(`PDF Studio: ${toolName}`);
   },
   acquireImageLock(operationName) {
     if (this.isMediaProcessing()) {
@@ -419,18 +411,27 @@ const concurrencyLock = {
     this.imageJob.operation = operationName;
     this.imageJob.startedAt = Date.now();
     this.imageJob.activeFiles.clear();
+    this._imageWakeLock = wakeLockManager.acquire(`Sharp: ${operationName}`);
   },
   releasePdfLock() {
     this.pdfJob.isProcessing = false;
     this.pdfJob.tool = '';
     this.pdfJob.startedAt = null;
     this.pdfJob.activeFiles.clear();
+    if (this._pdfWakeLock) {
+      try { this._pdfWakeLock.release(); } catch (e) {}
+      this._pdfWakeLock = null;
+    }
   },
   releaseImageLock() {
     this.imageJob.isProcessing = false;
     this.imageJob.operation = '';
     this.imageJob.startedAt = null;
     this.imageJob.activeFiles.clear();
+    if (this._imageWakeLock) {
+      try { this._imageWakeLock.release(); } catch (e) {}
+      this._imageWakeLock = null;
+    }
   }
 };
 
@@ -606,6 +607,7 @@ function cleanDirectory(dirPath, isTempUploads = false) {
 function runAutoCleanup() {
   console.log('[Cleanup] Running periodic sweep...');
   try {
+    wakeLockManager.cleanupStaleLocks(STALE_LOCK_TIMEOUT_MS);
     cleanDirectory(TEMP_UPLOADS_DIR, true);
     cleanDirectory(PDF_TEMP_UPLOADS_DIR, true);
     cleanDirectory(PROCESSED_DIR, false);
@@ -1864,8 +1866,17 @@ function extractFfmpegError(stderr) {
   return lines[lines.length - 1] || null;
 }
 
-// Execute FFmpeg Job directly
-function executeJob(job) {
+// Execute FFmpeg Job directly (wrapped with on-demand Termux wake-lock)
+function executeJob(job, isRetry = false) {
+  if (isRetry) {
+    return _executeJobInternal(job);
+  }
+  return wakeLockManager.withWakeLock(`FFmpeg: ${job.name || job.id}`, () => {
+    return _executeJobInternal(job);
+  });
+}
+
+function _executeJobInternal(job) {
   return new Promise((resolve, reject) => {
     job.status = 'processing';
     job.startedAt = Date.now();
@@ -2215,7 +2226,7 @@ function executeJob(job) {
             job.commandString = buildSafeFfmpegCommand(fallbackArgs, resolvedPath, job.outputPath, 'ffmpeg');
             activeJob.commandString = job.commandString;
 
-            return executeJob(job).then(resolve).catch(reject);
+            return executeJob(job, true).then(resolve).catch(reject);
           }
 
           job._settled = true;
@@ -2300,7 +2311,8 @@ app.use('/api/pdf', createPdfRouter({
   concurrencyLock,
   TEMP_UPLOADS_DIR,
   PROCESSED_DIR,
-  cleanupTempUploadsOnError
+  cleanupTempUploadsOnError,
+  wakeLockManager
 }));
 
 // ======================== IMAGE STUDIO API (sharp) ========================
@@ -4435,6 +4447,7 @@ if (require.main === module) {
 module.exports = {
   app,
   concurrencyLock,
+  wakeLockManager,
   isFileInActiveProcessing,
   cleanDirectory,
   runAutoCleanup,

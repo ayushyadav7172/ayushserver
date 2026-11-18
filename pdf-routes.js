@@ -82,7 +82,8 @@ function createPdfRouter(deps) {
     concurrencyLock,
     TEMP_UPLOADS_DIR,
     PROCESSED_DIR,
-    cleanupTempUploadsOnError
+    cleanupTempUploadsOnError,
+    wakeLockManager
   } = deps || {};
 
   const EFFECTIVE_OUTPUT_DIR = PROCESSED_DIR || UPLOAD_OUTPUT_DIR;
@@ -113,17 +114,27 @@ function createPdfRouter(deps) {
 
   function pdfConcurrencyMiddleware(toolName) {
     return (req, res, next) => {
-      if (!concurrencyLock) return next();
-      try {
-        concurrencyLock.acquirePdfLock(toolName);
-      } catch (err) {
-        return next(err);
+      let directWakeLock = null;
+      if (concurrencyLock) {
+        try {
+          concurrencyLock.acquirePdfLock(toolName);
+        } catch (err) {
+          return next(err);
+        }
+      } else if (wakeLockManager) {
+        directWakeLock = wakeLockManager.acquire(`PDF Studio: ${toolName}`);
       }
       let released = false;
       const release = () => {
         if (!released) {
           released = true;
-          concurrencyLock.releasePdfLock();
+          if (concurrencyLock) {
+            concurrencyLock.releasePdfLock();
+          }
+          if (directWakeLock) {
+            try { directWakeLock.release(); } catch (e) {}
+            directWakeLock = null;
+          }
         }
       };
       res.once('finish', release);
