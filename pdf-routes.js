@@ -3,6 +3,7 @@ const fileUpload = require('express-fileupload');
 const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 const { PDFDocument, degrees } = require('pdf-lib');
 
@@ -547,11 +548,40 @@ function createPdfRouter(deps) {
   }
 
   async function readSource(source) {
-    if (source.kind === 'direct') {
-      return fs.promises.readFile(source.path);
-    }
-    const tempPath = await materializeUpload(source.file, source.ext);
-    return fs.promises.readFile(tempPath);
+    const filePath = (source.kind === 'direct' || (source.path && !source.file))
+      ? source.path
+      : await materializeUpload(source.file, source.ext);
+
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      const stream = fs.createReadStream(filePath);
+
+      stream.on('data', (chunk) => {
+        chunks.push(chunk);
+      });
+
+      stream.on('end', () => {
+        try {
+          const buffer = Buffer.concat(chunks);
+          resolve(buffer);
+        } catch (err) {
+          if (isMemoryFailure(err)) {
+            reject(createHttpError(413, `${sourceLabel(source)} is too large to load into memory on this device.`));
+          } else {
+            reject(err);
+          }
+        }
+      });
+
+      stream.on('error', (err) => {
+        try { stream.destroy(); } catch (e) {}
+        if (isMemoryFailure(err)) {
+          reject(createHttpError(413, `${sourceLabel(source)} ran out of memory while reading.`));
+        } else {
+          reject(err);
+        }
+      });
+    });
   }
 
   function sourceLabel(source) {
@@ -629,7 +659,7 @@ function createPdfRouter(deps) {
 
   function sourceSizeBytes(source) {
     if (!source) return 0;
-    if (source.kind === 'direct') {
+    if (source.kind === 'direct' || (source.path && !source.file)) {
       try {
         return fs.statSync(source.path).size;
       } catch (err) {
@@ -639,10 +669,18 @@ function createPdfRouter(deps) {
     if (source.file && Number.isFinite(source.file.size) && source.file.size > 0) {
       return source.file.size;
     }
+    if (source.file && source.file.data && Buffer.isBuffer(source.file.data)) {
+      return source.file.data.length;
+    }
     if (source.file && source.file.tempFilePath) {
       try {
         return fs.statSync(source.file.tempFilePath).size;
-      } catch (err) {}
+      } catch (err) {
+        return 0;
+      }
+    }
+    if (Number.isFinite(source.size) && source.size > 0) {
+      return source.size;
     }
     return 0;
   }
