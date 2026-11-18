@@ -88,11 +88,6 @@ const storageNoticeBanner = document.getElementById('storageNoticeBanner');
 const btnCopyStorageCmd = document.getElementById('btnCopyStorageCmd');
 const explorerSearchInput = document.getElementById('explorerSearchInput');
 const btnClearSearch = document.getElementById('btnClearSearch');
-const selectedMediaPreviewWrap = document.getElementById('selectedMediaPreviewWrap');
-const selectedMediaVideoPlayer = document.getElementById('selectedMediaVideoPlayer');
-const selectedMediaAudioPlayer = document.getElementById('selectedMediaAudioPlayer');
-const btnSetTrimStart = document.getElementById('btnSetTrimStart');
-const btnSetTrimEnd = document.getElementById('btnSetTrimEnd');
 const btnDownloadOutput = document.getElementById('btnDownloadOutput');
 const btnProminentDownload = document.getElementById('btnProminentDownload');
 const btnMediaModeLocal = document.getElementById('btnMediaModeLocal');
@@ -362,6 +357,26 @@ function formatTime(seconds) {
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
   return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
+}
+
+// Helper: Parse time string (HH:MM:SS or MM:SS or raw seconds) to seconds
+function parseTimeToSeconds(str) {
+  if (!str) return 0;
+  if (typeof str === 'number') return str;
+  const clean = String(str).trim();
+  const parts = clean.split(':');
+  if (parts.length === 3) {
+    const h = parseInt(parts[0], 10) || 0;
+    const m = parseInt(parts[1], 10) || 0;
+    const s = parseFloat(parts[2]) || 0;
+    return h * 3600 + m * 60 + s;
+  } else if (parts.length === 2) {
+    const m = parseInt(parts[0], 10) || 0;
+    const s = parseFloat(parts[1]) || 0;
+    return m * 60 + s;
+  }
+  const val = parseFloat(clean);
+  return isNaN(val) ? 0 : val;
 }
 
 // Helper: Copy text to clipboard (works on both HTTPS and HTTP localhost)
@@ -993,29 +1008,6 @@ function setupNavigation() {
     });
   }
 
-  // Set Trim Start / End from preview player
-  if (btnSetTrimStart) {
-    btnSetTrimStart.addEventListener('click', () => {
-      const curTime = (selectedMediaVideoPlayer && selectedMediaVideoPlayer.currentTime) ||
-                      (selectedMediaAudioPlayer && selectedMediaAudioPlayer.currentTime) || 0;
-      const formatted = formatTime(curTime);
-      const startInput = document.getElementById('trimStart');
-      if (startInput) startInput.value = formatted;
-      showToast(`Set Trim Start: ${formatted}`, 'info');
-    });
-  }
-
-  if (btnSetTrimEnd) {
-    btnSetTrimEnd.addEventListener('click', () => {
-      const curTime = (selectedMediaVideoPlayer && selectedMediaVideoPlayer.currentTime) ||
-                      (selectedMediaAudioPlayer && selectedMediaAudioPlayer.currentTime) || 0;
-      const formatted = formatTime(curTime);
-      const endInput = document.getElementById('trimEnd');
-      if (endInput) endInput.value = formatted;
-      showToast(`Set Trim End: ${formatted}`, 'info');
-    });
-  }
-
   // Clear / Remove Selected File Buttons
   const btnClearSelectedFile = document.getElementById('btnClearSelectedFile');
   if (btnClearSelectedFile) {
@@ -1316,18 +1308,6 @@ function clearSelectedMedia() {
   if (targetMediaCard) targetMediaCard.style.display = 'none';
   if (targetFileNameDisplay) targetFileNameDisplay.textContent = 'No file selected';
 
-  if (selectedMediaVideoPlayer) {
-    try { selectedMediaVideoPlayer.pause(); } catch (e) {}
-    selectedMediaVideoPlayer.src = '';
-    selectedMediaVideoPlayer.style.display = 'none';
-  }
-  if (selectedMediaAudioPlayer) {
-    try { selectedMediaAudioPlayer.pause(); } catch (e) {}
-    selectedMediaAudioPlayer.src = '';
-    selectedMediaAudioPlayer.style.display = 'none';
-  }
-  if (selectedMediaPreviewWrap) selectedMediaPreviewWrap.style.display = 'none';
-
   renderAudioTrackCheckboxes([]);
   renderSubtitleTrackCheckboxes([]);
   updateOperationsSummary();
@@ -1448,22 +1428,6 @@ function populateSelectedMediaUI(data) {
       pill.textContent = text;
       targetMediaPills.appendChild(pill);
     });
-  }
-
-  // 3. Embedded Preview Player for Selected File
-  if (selectedMediaPreviewWrap) {
-    const streamUrl = `/api/stream-file?path=${encodeURIComponent(selectedMedia.filePath)}`;
-    if (isVideo && selectedMediaVideoPlayer) {
-      selectedMediaVideoPlayer.src = streamUrl;
-      selectedMediaVideoPlayer.style.display = 'block';
-      if (selectedMediaAudioPlayer) selectedMediaAudioPlayer.style.display = 'none';
-      selectedMediaPreviewWrap.style.display = 'block';
-    } else if (selectedMediaAudioPlayer) {
-      selectedMediaAudioPlayer.src = streamUrl;
-      selectedMediaAudioPlayer.style.display = 'block';
-      if (selectedMediaVideoPlayer) selectedMediaVideoPlayer.style.display = 'none';
-      selectedMediaPreviewWrap.style.display = 'block';
-    }
   }
 
   // 4. Populate Audio Tracks Checklist (dynamically rendered, checked by default)
@@ -2155,6 +2119,15 @@ async function executeAllOperations() {
     return;
   }
 
+  if (ops.trim?.enabled) {
+    const startSec = parseTimeToSeconds(ops.trim.start || '00:00:00');
+    const endSec = ops.trim.end ? parseTimeToSeconds(ops.trim.end) : null;
+    if (endSec !== null && endSec <= startSec) {
+      showToast('Trim End time must be greater than Start time.', 'warning');
+      return;
+    }
+  }
+
   try {
     showToast('Dispatching Multi-Operation FFmpeg job...', 'info');
 
@@ -2323,30 +2296,6 @@ function setupMultiOpListeners() {
   const opTrimEnd = document.getElementById('opTrimEnd');
   if (opTrimStart) opTrimStart.addEventListener('input', updateOperationsSummary);
   if (opTrimEnd) opTrimEnd.addEventListener('input', updateOperationsSummary);
-
-  const btnMultiTrimStart = document.getElementById('btnMultiTrimStart');
-  if (btnMultiTrimStart) {
-    btnMultiTrimStart.addEventListener('click', () => {
-      const cur = (selectedMediaVideoPlayer && selectedMediaVideoPlayer.currentTime) ||
-                  (selectedMediaAudioPlayer && selectedMediaAudioPlayer.currentTime) || 0;
-      const formatted = formatTime(cur);
-      if (opTrimStart) opTrimStart.value = formatted;
-      showToast(`Set Trim Start: ${formatted}`, 'info');
-      updateOperationsSummary();
-    });
-  }
-
-  const btnMultiTrimEnd = document.getElementById('btnMultiTrimEnd');
-  if (btnMultiTrimEnd) {
-    btnMultiTrimEnd.addEventListener('click', () => {
-      const cur = (selectedMediaVideoPlayer && selectedMediaVideoPlayer.currentTime) ||
-                  (selectedMediaAudioPlayer && selectedMediaAudioPlayer.currentTime) || 0;
-      const formatted = formatTime(cur);
-      if (opTrimEnd) opTrimEnd.value = formatted;
-      showToast(`Set Trim End: ${formatted}`, 'info');
-      updateOperationsSummary();
-    });
-  }
 
   // Audio Only Toggle
   const opCheckAudioOnly = document.getElementById('opCheckAudioOnly');
@@ -2841,26 +2790,30 @@ function handleJobCompleted(data) {
     resultMetaSize.textContent = `Size: ${file.sizeFormatted || ''}`;
     savedPathLocation.textContent = file.path;
 
-    // Direct Browser Preview
+    // Direct Browser Preview — video/audio streaming is disabled to save Cloudflare Tunnel data
     mediaPreviewContainer.innerHTML = '';
     const ext = file.path.split('.').pop().toLowerCase();
+    const outFilename = file.filename || file.path.split('/').pop();
 
-    if (['mp4', 'webm', 'mkv', 'mov'].includes(ext)) {
-      const video = document.createElement('video');
-      video.controls = true;
-      video.playsInline = true;
-      video.src = file.previewUrl || `/api/stream-file?path=${encodeURIComponent(file.path)}`;
-      mediaPreviewContainer.appendChild(video);
-    } else if (['mp3', 'wav', 'aac', 'flac', 'ogg', 'm4a'].includes(ext)) {
-      const audio = document.createElement('audio');
-      audio.controls = true;
-      audio.src = file.previewUrl || `/api/stream-file?path=${encodeURIComponent(file.path)}`;
-      mediaPreviewContainer.appendChild(audio);
-    } else if (['gif', 'png', 'jpg', 'jpeg'].includes(ext)) {
+    if (['gif', 'png', 'jpg', 'jpeg'].includes(ext)) {
       const img = document.createElement('img');
       img.src = file.previewUrl || `/api/stream-file?path=${encodeURIComponent(file.path)}`;
       img.alt = 'Processed output';
       mediaPreviewContainer.appendChild(img);
+    } else {
+      const isAud = ['mp3', 'wav', 'aac', 'flac', 'ogg', 'm4a'].includes(ext);
+      const icon = isAud ? '🎵' : '🎬';
+      const typeLabel = isAud ? 'Audio' : 'Video';
+      const safeFilename = escapeHtml(outFilename);
+      mediaPreviewContainer.innerHTML = `
+        <div class="result-media-card">
+          <div class="result-media-icon">${icon}</div>
+          <div class="result-media-details">
+            <span class="result-media-title">${safeFilename}</span>
+            <span class="result-media-sub">${typeLabel} processed successfully • Saved on device (streaming disabled to save data)</span>
+          </div>
+        </div>
+      `;
     }
 
     // "Use as New Input" handler
@@ -2871,7 +2824,6 @@ function handleJobCompleted(data) {
     };
 
     // Download / Save Button & Prominent Download Result Button
-    const outFilename = file.filename || file.path.split('/').pop();
     const downloadEndpoint = file.downloadUrl || (file.isDirectPath ? `/api/download/${encodeURIComponent(outFilename)}?path=${encodeURIComponent(file.path)}` : `/api/download/${encodeURIComponent(outFilename)}`);
 
     if (btnProminentDownload) {

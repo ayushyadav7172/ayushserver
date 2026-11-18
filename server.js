@@ -1455,8 +1455,10 @@ function buildDynamicFfmpegArgs({ inputPath, operations = {}, audioTracks = [], 
   const videoFilters = [];
 
   if (!isAudioOnly && isResizeEnabled) {
-    const w = parseInt(resize.width, 10);
-    const h = parseInt(resize.height, 10);
+    const rawW = parseInt(resize.width, 10);
+    const rawH = parseInt(resize.height, 10);
+    const w = rawW ? (rawW % 2 === 0 ? rawW : rawW - 1) : null;
+    const h = rawH ? (rawH % 2 === 0 ? rawH : rawH - 1) : null;
     if (w && h) {
       videoFilters.push(`scale=${w}:${h}`);
     } else if (w) {
@@ -2160,7 +2162,7 @@ function _executeJobInternal(job) {
               size: stat.size,
               sizeFormatted: formatBytes(stat.size),
               previewUrl: `/api/stream-file?path=${encodeURIComponent(resolvedOutput)}`,
-              downloadUrl: `/api/download/${encodeURIComponent(path.basename(resolvedOutput))}`,
+              downloadUrl: buildOutputDownloadUrl(resolvedOutput),
               metadata: meta,
               expiresAt: Date.now() + (30 * 60 * 1000)
             };
@@ -3315,6 +3317,21 @@ app.get('/api/download/:filename', (req, res) => {
       }
     }
 
+    // Direct-path support: Allow downloading output files explicitly located within allowed roots
+    if (!foundPath && req.query.path) {
+      try {
+        const queryPath = assertPathAllowed(req.query.path, 'Download file');
+        if (fs.existsSync(queryPath) && fs.statSync(queryPath).isFile()) {
+          const ext = path.extname(queryPath).toLowerCase();
+          if (DOWNLOADABLE_EXTS.has(ext)) {
+            foundPath = queryPath;
+          }
+        }
+      } catch (err) {
+        // Path validation error handled below
+      }
+    }
+
     if (!foundPath) {
       return res.status(404).send('File not found or has expired (auto-deleted after 30 minutes).');
     }
@@ -3698,11 +3715,17 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
         jobOpName = 'multi';
       }
 
-      // Account for trim duration
+      // Account for trim duration & validate
       if (operations.trim && (operations.trim.enabled !== false)) {
         const startSec = operations.trim.start ? parseTimeToSeconds(operations.trim.start) : 0;
-        const endSec = operations.trim.end ? parseTimeToSeconds(operations.trim.end) : totalDurationSec;
-        if (endSec > startSec) {
+        const endSec = operations.trim.end ? parseTimeToSeconds(operations.trim.end) : null;
+        if (endSec !== null && endSec <= startSec) {
+          activeJob.status = 'idle';
+          activeJob.filePath = '';
+          activeJob.outputPath = '';
+          return res.status(400).json({ error: 'Trim End time must be greater than Start time.' });
+        }
+        if (endSec !== null && endSec > startSec) {
           totalDurationSec = endSec - startSec;
         }
       }
@@ -4198,14 +4221,14 @@ app.get(['/api/progress/:jobId', '/api/progress'], (req, res) => {
     }
     console.log(`[SSE Connection] Client disconnected (Remaining SSE: ${globalSseClients.size})`);
 
-    // Zombie process prevention: If user closes browser mid-conversion,
-    // wait 30 seconds (to allow page refresh). If still 0 clients connected,
-    // kill the active FFmpeg process and reset activeJob to idle.
-    if (globalSseClients.size === 0 && activeJob.status === 'processing') {
+    // Zombie process prevention: If user closes browser mid-conversion on remote uploads,
+    // allow a 5-minute grace period (handles mobile backgrounding, screen locks, and tunnel reconnects).
+    // Local storage jobs run to completion without being killed when the phone screen is locked.
+    if (activeJob.isRemoteUpload && globalSseClients.size === 0 && activeJob.status === 'processing') {
       if (zombieInactivityTimer) clearTimeout(zombieInactivityTimer);
       zombieInactivityTimer = setTimeout(() => {
-        if (globalSseClients.size === 0 && activeJob.status === 'processing') {
-          console.warn(`[Zombie Protection] No client connected for 30s while job ${activeJob.jobId} was running. Terminating FFmpeg process.`);
+        if (globalSseClients.size === 0 && activeJob.status === 'processing' && activeJob.isRemoteUpload) {
+          console.warn(`[Zombie Protection] No client connected for 5 minutes during remote job ${activeJob.jobId}. Terminating abandoned job.`);
           if (currentFFmpegProcess && !currentFFmpegProcess.killed) {
             try {
               const pid = currentFFmpegProcess.pid;
@@ -4219,9 +4242,9 @@ app.get(['/api/progress/:jobId', '/api/progress'], (req, res) => {
           }
           activeJob.status = 'idle';
           activeJob.jobId = null;
-          activeJob.error = 'Job cancelled: browser disconnected.';
+          activeJob.error = 'Job cancelled: remote browser disconnected for over 5 minutes.';
         }
-      }, 30000);
+      }, 5 * 60 * 1000);
     }
   });
 });
@@ -4299,6 +4322,11 @@ app.get('/api/stream-file', (req, res) => {
         head['Content-Disposition'] = `attachment; filename="${encodeURIComponent(path.basename(filePath))}"`;
       }
       res.writeHead(206, head);
+      res.on('close', () => { file.destroy(); });
+      file.on('error', (err) => {
+        if (!res.headersSent) res.status(500).end();
+        file.destroy();
+      });
       file.pipe(res);
     } else {
       const head = {
@@ -4310,7 +4338,13 @@ app.get('/api/stream-file', (req, res) => {
         head['Content-Disposition'] = `attachment; filename="${encodeURIComponent(path.basename(filePath))}"`;
       }
       res.writeHead(200, head);
-      fs.createReadStream(filePath).pipe(res);
+      const stream = fs.createReadStream(filePath);
+      res.on('close', () => { stream.destroy(); });
+      stream.on('error', (err) => {
+        if (!res.headersSent) res.status(500).end();
+        stream.destroy();
+      });
+      stream.pipe(res);
     }
   } catch (err) {
     res.status(500).send('Streaming error: ' + err.message);

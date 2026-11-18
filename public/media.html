@@ -214,11 +214,6 @@
             </div>
           </div>
 
-          <div id="selectedMediaPreviewWrap" class="preview-wrap" style="display:none;">
-            <video id="selectedMediaVideoPlayer" class="media-player" controls playsinline style="display:none;"></video>
-            <audio id="selectedMediaAudioPlayer" controls style="width:100%; display:none;"></audio>
-          </div>
-
           <div class="pills" id="selectedMetaPills"></div>
 
           <div class="actions-row">
@@ -458,17 +453,11 @@
               <div class="op-body" id="opTrimControls" style="display:none;">
                 <div class="grid-2">
                   <div class="field">
-                    <div class="field-topline">
-                      <label for="opTrimStart" class="field-label">Start</label>
-                      <button type="button" id="btnMultiTrimStart" class="link-btn" title="Use preview player time">Use player time</button>
-                    </div>
+                    <label for="opTrimStart" class="field-label">Start (HH:MM:SS)</label>
                     <input type="text" id="opTrimStart" class="input" placeholder="00:00:00" value="00:00:00">
                   </div>
                   <div class="field">
-                    <div class="field-topline">
-                      <label for="opTrimEnd" class="field-label">End</label>
-                      <button type="button" id="btnMultiTrimEnd" class="link-btn" title="Use preview player time">Use player time</button>
-                    </div>
+                    <label for="opTrimEnd" class="field-label">End (HH:MM:SS)</label>
                     <input type="text" id="opTrimEnd" class="input" placeholder="00:01:00">
                   </div>
                 </div>

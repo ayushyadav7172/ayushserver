@@ -553,6 +553,40 @@ input[type="checkbox"], input[type="radio"] {
 .preview-wrap { padding: 0 18px 16px; }
 .media-player { width: 100%; border-radius: var(--r); background: #000; }
 
+/* Result Media Card (Replaces video streaming to eliminate tunnel data transfer) */
+.result-media-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  margin-top: 10px;
+  box-shadow: var(--shadow);
+}
+.result-media-icon {
+  font-size: 2rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.result-media-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+.result-media-title {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.96rem;
+  word-break: break-all;
+}
+.result-media-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
 .actions-row { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 18px 18px; align-items: center; }
 .actions-end { justify-content: flex-end; padding: 12px 0 0; }
 
