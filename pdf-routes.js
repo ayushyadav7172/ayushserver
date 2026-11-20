@@ -1542,7 +1542,12 @@ function createPdfRouter(deps) {
       return res.status(507).json({ success: false, error: 'Upload failed: Not enough storage space on the server.' });
     }
     const status = err.status || (err.name === 'AbortError' ? 413 : 500);
-    const message = err.status ? err.message : `PDF operation failed: ${err.message}`;
+    if (status >= 500) {
+      console.error('[PDF Error]', err);
+    }
+    const message = (status < 500 || err.expose)
+      ? (err.message || 'PDF operation failed.')
+      : 'PDF operation failed due to an internal server error.';
     res.status(status).json({ success: false, error: message });
   });
 

@@ -53,7 +53,8 @@
   }
 
   function imageUrl(filePath, download) {
-    return `/api/image/preview?path=${encodeURIComponent(filePath)}${download ? '&download=1' : ''}`;
+    const raw = `/api/image/preview?path=${encodeURIComponent(filePath)}${download ? '&download=1' : ''}`;
+    return window.appendStudioToken ? window.appendStudioToken(raw) : raw;
   }
 
   function formatBytes(bytes) {

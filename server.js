@@ -1,9 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
-const bodyParser = require('body-parser');
-const cookieParser = require('cookie-parser');
-const session = require('express-session');
 const { spawn, execFile, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -15,6 +12,7 @@ const { createPdfRouter } = require('./pdf-routes');
 const { wakeLockManager } = require('./wake-lock');
 
 const app = express();
+app.disable('x-powered-by');
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
@@ -50,23 +48,76 @@ if (!fs.existsSync(PDF_OUTPUTS_DIR)) {
 const ALLOWED_ROOTS = ['/sdcard', '/storage', process.env.HOME || os.homedir(), __dirname, TEMP_UPLOADS_DIR, PROCESSED_DIR, PDF_TEMP_UPLOADS_DIR, PDF_OUTPUTS_DIR]
   .filter(Boolean);
 
-// Resolve symlinks on the nearest existing ancestor so non-existent output
-// paths are still checked against the real (canonical) allowlisted roots.
+// Resolve symlinks and canonicalize target paths with traversal and loop protection
 function canonicalizeTarget(targetPath) {
   if (!targetPath || typeof targetPath !== 'string') return '';
-  let current;
+  let clean = targetPath.trim();
+
+  // Safely decode nested URL encodings (up to 5 iterations)
   try {
-    current = path.resolve(String(targetPath));
+    for (let i = 0; i < 5; i++) {
+      if (!clean.includes('%')) break;
+      const next = decodeURIComponent(clean);
+      if (next === clean) break;
+      clean = next;
+    }
   } catch (e) {
     return '';
   }
 
+  // Reject null bytes, URL-encoded null bytes, or illegal control characters
+  if (clean.includes('\0') || /%00/i.test(clean) || /[\x00-\x1f\x7f]/.test(clean)) {
+    return '';
+  }
+
+  // Strip wrapping quotes
+  clean = clean.replace(/^['"]|['"]$/g, '');
+
+  // Expand home tilde safely
+  if (clean.startsWith('~')) {
+    clean = clean.replace(/^~(?=$|\/|\\)/, process.env.HOME || os.homedir());
+  }
+
+  let current;
+  try {
+    current = path.resolve(clean);
+  } catch (e) {
+    return '';
+  }
+
+  const visited = new Set();
   const suffix = [];
-  while (!fs.existsSync(current)) {
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    suffix.unshift(path.basename(current));
-    current = parent;
+
+  while (true) {
+    if (visited.has(current)) return ''; // symlink loop detected
+    visited.add(current);
+
+    try {
+      const lstat = fs.lstatSync(current);
+      if (lstat.isSymbolicLink()) {
+        try {
+          current = fs.realpathSync(current);
+        } catch (e) {
+          // Dangling or inaccessible symlink
+          let linkTarget = fs.readlinkSync(current);
+          if (!path.isAbsolute(linkTarget)) {
+            linkTarget = path.resolve(path.dirname(current), linkTarget);
+          }
+          current = linkTarget;
+          continue;
+        }
+      }
+      break;
+    } catch (e) {
+      if (e.code === 'ENOENT') {
+        const parent = path.dirname(current);
+        if (parent === current) break;
+        suffix.unshift(path.basename(current));
+        current = parent;
+        continue;
+      }
+      break;
+    }
   }
 
   let real = current;
@@ -89,7 +140,7 @@ function isPathWithinRoot(candidate, root) {
 }
 
 function isPathAllowed(targetPath) {
-  if (!targetPath || typeof targetPath !== 'string' || targetPath.includes('\0')) return false;
+  if (!targetPath || typeof targetPath !== 'string' || targetPath.includes('\0') || /%00/i.test(targetPath)) return false;
   const canonical = canonicalizeTarget(targetPath);
   if (!canonical) return false;
   return CANONICAL_ALLOWED_ROOTS.some(root => isPathWithinRoot(canonical, root));
@@ -102,10 +153,11 @@ function createHttpError(status, message) {
 }
 
 function assertPathAllowed(targetPath, label = 'Path') {
-  if (!isPathAllowed(targetPath)) {
+  if (!targetPath || !isPathAllowed(targetPath)) {
     throw createHttpError(403, `${label} is outside the allowed storage roots (/sdcard, /storage, Termux home).`);
   }
-  return path.resolve(String(targetPath));
+  const canonical = canonicalizeTarget(targetPath);
+  return canonical || path.resolve(String(targetPath));
 }
 
 function getAllowedParent(dirPath) {
@@ -124,23 +176,55 @@ function getAllowedRootsForUi() {
 // Termux Wake Lock: Acquired on-demand ONLY when heavy tasks (FFmpeg, qpdf, sharp)
 // are actively running, and released immediately when finished (via wakeLockManager).
 
+// ======================== CORS & SECURITY HEADERS ========================
+const allowedOriginsEnv = process.env.CORS_ORIGIN;
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, direct browser, Termux localhost webview)
+    if (!origin) return callback(null, true);
+
+    // If explicit origins configured via environment:
+    if (allowedOriginsEnv) {
+      if (allowedOriginsEnv === '*') return callback(null, true);
+      const allowedList = allowedOriginsEnv.split(',').map(s => s.trim().toLowerCase());
+      if (allowedList.includes(origin.toLowerCase())) {
+        return callback(null, true);
+      }
+      return callback(new Error('Not allowed by CORS'));
+    }
+
+    // Default safe policy for Termux Utility Studio:
+    // Allow localhost, 127.0.0.1, local private IP ranges, and Cloudflare tunnels
+    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+    const isPrivateIp = /^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/i.test(origin);
+    const isTunnel = /^https?:\/\/([a-z0-9-]+\.)?trycloudflare\.com$/i.test(origin);
+
+    if (isLocalhost || isPrivateIp || isTunnel) {
+      return callback(null, true);
+    }
+
+    return callback(new Error('Not allowed by CORS'));
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-ID', 'X-API-Key', 'x-api-token'],
+  credentials: true
+};
+
+app.use(cors(corsOptions));
+
+// HTTP Security Headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
 // Middleware
-app.use(cors());
 app.use(morgan('dev'));
-app.use(cookieParser('termux-ffmpeg-studio-secret'));
-app.use(session({
-  secret: 'termux-ffmpeg-studio-secret',
-  resave: false,
-  // Never create a session for anonymous requests. The app does not use
-  // req.session anywhere, so leaving this true would make the default
-  // MemoryStore grow with a new record for every polling/SSE client.
-  saveUninitialized: false,
-  cookie: {
-    secure: false, // allow non-HTTPS on localhost
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
-  }
-}));
-app.use(express.json({ limit: Infinity }));
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: Infinity, extended: true }));
 app.use(express.static(PUBLIC_DIR, { index: false }));
 
@@ -2305,6 +2389,89 @@ function _executeJobInternal(job) {
 
 // ======================== API ROUTES ========================
 
+// ======================== API TOKEN AUTHENTICATION ========================
+const CONFIGURED_API_TOKEN = (process.env.API_TOKEN || process.env.AUTH_TOKEN || '').trim();
+
+function verifyApiToken(req) {
+  if (!CONFIGURED_API_TOKEN) {
+    return true; // No token set in environment, auth disabled
+  }
+
+  let clientToken = null;
+
+  // 1. Authorization: Bearer <token>
+  const authHeader = req.headers['authorization'];
+  if (authHeader && typeof authHeader === 'string') {
+    const parts = authHeader.split(' ');
+    if (parts.length === 2 && /^bearer$/i.test(parts[0])) {
+      clientToken = parts[1].trim();
+    }
+  }
+
+  // 2. Custom headers
+  if (!clientToken && req.headers['x-api-token']) {
+    clientToken = String(req.headers['x-api-token']).trim();
+  }
+  if (!clientToken && req.headers['x-api-key']) {
+    clientToken = String(req.headers['x-api-key']).trim();
+  }
+
+  // 3. Query parameter (essential for EventSource SSE, <img> previews, direct downloads)
+  if (!clientToken && req.query) {
+    if (req.query.token) clientToken = String(req.query.token).trim();
+    else if (req.query.apiKey) clientToken = String(req.query.apiKey).trim();
+    else if (req.query.api_key) clientToken = String(req.query.api_key).trim();
+  }
+
+  // 4. JSON request body
+  if (!clientToken && req.body && typeof req.body === 'object') {
+    if (req.body.token) clientToken = String(req.body.token).trim();
+    else if (req.body.apiToken) clientToken = String(req.body.apiToken).trim();
+    else if (req.body.apiKey) clientToken = String(req.body.apiKey).trim();
+  }
+
+  if (!clientToken) {
+    return false;
+  }
+
+  const clientBuf = Buffer.from(clientToken);
+  const configBuf = Buffer.from(CONFIGURED_API_TOKEN);
+
+  if (clientBuf.length !== configBuf.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(clientBuf, configBuf);
+}
+
+function requireApiAuth(req, res, next) {
+  // CORS preflight requests must proceed
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+
+  if (!verifyApiToken(req)) {
+    return res.status(401).json({
+      success: false,
+      error: 'Unauthorized: Invalid or missing API token.'
+    });
+  }
+
+  next();
+}
+
+// Public auth check endpoint
+app.get('/api/auth/status', (req, res) => {
+  res.json({
+    success: true,
+    authRequired: Boolean(CONFIGURED_API_TOKEN),
+    authenticated: verifyApiToken(req)
+  });
+});
+
+// Protect all /api endpoints
+app.use('/api', requireApiAuth);
+
 // PDF & Document Studio API (isolated from FFmpeg routes)
 app.use('/api/pdf', createPdfRouter({
   assertPathAllowed,
@@ -3430,13 +3597,32 @@ app.get('/api/browse', (req, res) => {
 
       const fullPath = path.join(targetDir, entry.name);
 
+      let isDir = false;
+      let isFil = false;
+
       if (entry.isDirectory()) {
+        isDir = true;
+      } else if (entry.isFile()) {
+        isFil = true;
+      } else if (entry.isSymbolicLink()) {
+        try {
+          if (isPathAllowed(fullPath)) {
+            const st = fs.statSync(fullPath);
+            if (st.isDirectory()) isDir = true;
+            else if (st.isFile()) isFil = true;
+          }
+        } catch (e) {
+          continue; // broken or unreadable symlink
+        }
+      }
+
+      if (isDir) {
         items.push({
           name: entry.name,
           path: fullPath,
           isDirectory: true
         });
-      } else if (entry.isFile()) {
+      } else if (isFil) {
         const ext = path.extname(entry.name).toLowerCase();
         if (allowedExtensions.has(ext)) {
           let size = 0;
@@ -4430,15 +4616,28 @@ app.use((err, req, res, next) => {
     }
     return res.status(507).send(errorMsg);
   }
+  if (err.message === 'Not allowed by CORS') {
+    if (req.path.startsWith('/api/')) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Origin not allowed by CORS policy.' });
+    }
+    return res.status(403).send('Forbidden: Origin not allowed by CORS policy.');
+  }
+
   const status = err.status || err.statusCode || 500;
+  if (status >= 500) {
+    console.error('Unhandled server error:', err);
+  }
+
   if (req.path.startsWith('/api/')) {
+    const clientMessage = (status < 500 || err.expose)
+      ? (err.message || 'Request failed.')
+      : 'An unexpected internal server error occurred.';
     return res.status(status).json({
       success: false,
-      error: err.message || 'Request failed.'
+      error: clientMessage
     });
   }
-  console.error('Unhandled request error:', err.message);
-  return res.status(status).send('Request failed.');
+  return res.status(status).send(status < 500 ? (err.message || 'Request failed.') : 'Request failed.');
 });
 
 // Helper: Detect Local Network IPv4 Address
@@ -4473,6 +4672,11 @@ if (require.main === module) {
     console.log(`PDF & Docs Studio: http://localhost:${PORT}/pdf`);
     console.log(`Image Studio:      http://localhost:${PORT}/image`);
     console.log(`Network Access:    http://${localIP}:${PORT}`);
+    if (CONFIGURED_API_TOKEN) {
+      console.log('API Security:      Token Authentication ENABLED');
+    } else {
+      console.log('API Security:      Token Authentication DISABLED (set API_TOKEN to protect)');
+    }
     console.log('(Use the Network Access URL on other devices connected to the same Wi-Fi/Hotspot)');
     console.log('=========================================');
   });
