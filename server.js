@@ -185,35 +185,102 @@ function getAllowedRootsForUi() {
 
 // ======================== CORS & SECURITY HEADERS ========================
 const allowedOriginsEnv = process.env.CORS_ORIGIN;
+
+/**
+ * Validates request origins for Termux Utility Studio.
+ * Seamlessly supports:
+ * - Localhost and loopbacks (127.0.0.1, ::1, 0.0.0.0)
+ * - Wi-Fi and Hotspot interfaces (wlan0, ap0, 192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+ * - Android Mobile Cellular Data interfaces (ccmni*, rmnet*, pdp*):
+ *   - IPv4 Carrier-Grade NAT (CGNAT 100.64.0.0/10)
+ *   - Any dynamic carrier-assigned public IPv4
+ *   - IPv6 mobile addresses (2400::, 2402::, 2409::, SLAAC, link-local fe80::)
+ * - VPN and mesh networks (Tailscale 100.x, WireGuard, tun0)
+ * - Local mDNS hostnames (.local, .lan, .home, .internal)
+ * - Authorized dev tunnels (Cloudflare, Localtunnel, Ngrok)
+ * - Any active IP currently assigned to device network interfaces
+ */
+function isOriginAllowed(origin) {
+  // Allow requests with no origin (direct browser navigation, curl, Termux webview, local mobile apps)
+  if (!origin) return true;
+
+  // Explicit origins from environment override
+  if (allowedOriginsEnv) {
+    if (allowedOriginsEnv === '*') return true;
+    const allowedList = allowedOriginsEnv.split(',').map(s => s.trim().toLowerCase());
+    return allowedList.includes(origin.toLowerCase());
+  }
+
+  try {
+    const url = new URL(origin);
+    const host = url.hostname.toLowerCase();
+
+    // 1. Localhost and loopback addresses
+    if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1' || host === '[::1]') {
+      return true;
+    }
+
+    // 2. Any valid IPv4 address (LAN, Wi-Fi, Hotspot ap0, Cellular ccmni/rmnet, CGNAT 100.x, Tailscale)
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) {
+      return true;
+    }
+
+    // 3. Any valid IPv6 address (Cellular ccmni IPv6, SLAAC, link-local fe80::)
+    if (/^\[?[0-9a-fA-F:]+\]?$/.test(host)) {
+      return true;
+    }
+
+    // 4. Local network domains and mDNS
+    if (host.endsWith('.local') || host.endsWith('.lan') || host.endsWith('.home') || host.endsWith('.internal')) {
+      return true;
+    }
+
+    // 5. Authorized tunnels (Cloudflare tunnels, Localtunnel, Ngrok)
+    if (/(^|\.)(trycloudflare\.com|loca\.lt|ngrok(-free)?\.(io|app))$/i.test(host)) {
+      return true;
+    }
+
+    // 6. Check against any active network interface currently assigned on this device
+    const ifaces = os.networkInterfaces();
+    for (const ifaceName of Object.keys(ifaces)) {
+      for (const net of ifaces[ifaceName]) {
+        const addr = net.address.toLowerCase();
+        if (addr === host || `[${addr}]` === host) {
+          return true;
+        }
+      }
+    }
+  } catch (e) {
+    return false;
+  }
+
+  return false;
+}
+
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, direct browser, Termux localhost webview)
-    if (!origin) return callback(null, true);
-
-    // If explicit origins configured via environment:
-    if (allowedOriginsEnv) {
-      if (allowedOriginsEnv === '*') return callback(null, true);
-      const allowedList = allowedOriginsEnv.split(',').map(s => s.trim().toLowerCase());
-      if (allowedList.includes(origin.toLowerCase())) {
-        return callback(null, true);
-      }
-      return callback(new Error('Not allowed by CORS'));
-    }
-
-    // Default safe policy for Termux Utility Studio:
-    // Allow localhost, 127.0.0.1, local private IP ranges, and Cloudflare tunnels
-    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
-    const isPrivateIp = /^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/i.test(origin);
-    const isTunnel = /^https?:\/\/([a-z0-9-]+\.)?trycloudflare\.com$/i.test(origin);
-
-    if (isLocalhost || isPrivateIp || isTunnel) {
+    if (isOriginAllowed(origin)) {
       return callback(null, true);
     }
-
-    return callback(new Error('Not allowed by CORS'));
+    // Disallow without crashing Express with an unhandled 500 error
+    return callback(null, false);
   },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'X-Session-ID'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type',
+    'X-Session-ID',
+    'Range',
+    'Accept',
+    'Authorization',
+    'Cache-Control',
+    'X-Requested-With'
+  ],
+  exposedHeaders: [
+    'Content-Range',
+    'Accept-Ranges',
+    'Content-Length',
+    'Content-Type'
+  ],
   credentials: true
 };
 
@@ -4727,11 +4794,15 @@ app.use((err, req, res, next) => {
 function getLocalIP() {
   const interfaces = os.networkInterfaces();
   const priorityKeys = Object.keys(interfaces).sort((a, b) => {
-    const isAPriority = /^(wlan|ap|eth|en)/i.test(a);
-    const isBPriority = /^(wlan|ap|eth|en)/i.test(b);
-    if (isAPriority && !isBPriority) return -1;
-    if (!isAPriority && isBPriority) return 1;
-    return 0;
+    // Priority: Wi-Fi/Hotspot > Mobile Cellular (ccmni/rmnet) > Ethernet > VPN > Other
+    const score = (name) => {
+      if (/^(wlan|ap|softap)/i.test(name)) return 10;
+      if (/^(ccmni|rmnet|pdp)/i.test(name)) return 8;
+      if (/^(eth|en)/i.test(name)) return 6;
+      if (/^(tun|tailscale|wg)/i.test(name)) return 4;
+      return 1;
+    };
+    return score(b) - score(a);
   });
 
   for (const name of priorityKeys) {
@@ -4742,6 +4813,37 @@ function getLocalIP() {
     }
   }
   return 'localhost';
+}
+
+// Helper: Summarize all active device network interfaces (Wi-Fi, Hotspot, Cellular ccmni, VPN)
+function getNetworkInterfacesSummary() {
+  const interfaces = os.networkInterfaces();
+  const list = [];
+
+  for (const [name, addrs] of Object.entries(interfaces)) {
+    for (const net of addrs) {
+      if (!net.internal) {
+        let type = 'Other';
+        if (/^(wlan|ap|softap)/i.test(name)) type = 'Wi-Fi / Hotspot';
+        else if (/^(ccmni|rmnet|pdp)/i.test(name)) type = 'Mobile Cellular Data';
+        else if (/^(tun|tailscale|wg)/i.test(name)) type = 'VPN / Mesh';
+        else if (/^(eth|en)/i.test(name)) type = 'Ethernet';
+
+        const isIPv6 = net.family === 'IPv6' || net.family === 6;
+        const displayAddr = isIPv6 ? `[${net.address}]` : net.address;
+
+        list.push({
+          interface: name,
+          type,
+          family: isIPv6 ? 'IPv6' : 'IPv4',
+          address: net.address,
+          url: `http://${displayAddr}:${PORT}`
+        });
+      }
+    }
+  }
+
+  return list;
 }
 
 // Background Services Initialization
@@ -4776,21 +4878,49 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Start Server
+// Start Server with dual-stack IPv6 + IPv4 support
 if (require.main === module) {
-  app.listen(PORT, '0.0.0.0', () => {
+  const BIND_HOST = process.env.HOST || '::';
+
+  function onListen(hostUsed) {
     const localIP = getLocalIP();
+    const ifaceList = getNetworkInterfacesSummary();
+
     console.log('=========================================');
     console.log('Termux Utility Studio is running!');
-    console.log(`Home:              http://localhost:${PORT}`);
+    console.log(`Bound to:          ${hostUsed}:${PORT}`);
+    console.log(`Localhost:         http://localhost:${PORT}`);
     console.log(`Dashboard:         http://localhost:${PORT}/dashboard`);
     console.log(`API Docs:          http://localhost:${PORT}/docs`);
     console.log(`Media Studio:      http://localhost:${PORT}/media`);
     console.log(`PDF & Docs Studio: http://localhost:${PORT}/pdf`);
     console.log(`Image Studio:      http://localhost:${PORT}/image`);
-    console.log(`Network Access:    http://${localIP}:${PORT}`);
-    console.log('(Use the Network Access URL on other devices connected to the same Wi-Fi/Hotspot)');
+    console.log('');
+    console.log('Active Network Addresses:');
+    if (ifaceList.length > 0) {
+      for (const iface of ifaceList) {
+        console.log(`  • [${iface.interface}] (${iface.type} ${iface.family}): ${iface.url}`);
+      }
+    } else {
+      console.log(`  • http://${localIP}:${PORT}`);
+    }
+    console.log('(Access the site from other devices or browsers using any of the above network URLs)');
     console.log('=========================================');
+  }
+
+  const serverInstance = app.listen(PORT, BIND_HOST, () => {
+    onListen(BIND_HOST);
+  });
+
+  serverInstance.on('error', (err) => {
+    if (BIND_HOST === '::' && (err.code === 'EAFNOSUPPORT' || err.code === 'EADDRNOTAVAIL')) {
+      console.warn('[Server] Dual-stack :: bind unavailable, falling back to 0.0.0.0...');
+      app.listen(PORT, '0.0.0.0', () => {
+        onListen('0.0.0.0');
+      });
+    } else {
+      throw err;
+    }
   });
 }
 
@@ -4808,5 +4938,9 @@ module.exports = {
   cleanupManager,
   backupManager,
   healthMonitor,
-  analyticsService
+  analyticsService,
+  isOriginAllowed,
+  corsOptions,
+  getLocalIP,
+  getNetworkInterfacesSummary
 };
