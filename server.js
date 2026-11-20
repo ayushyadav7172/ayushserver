@@ -206,7 +206,7 @@ const corsOptions = {
     return callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-ID', 'X-API-Key', 'x-api-token'],
+  allowedHeaders: ['Content-Type', 'X-Session-ID'],
   credentials: true
 };
 
@@ -2388,89 +2388,6 @@ function _executeJobInternal(job) {
 }
 
 // ======================== API ROUTES ========================
-
-// ======================== API TOKEN AUTHENTICATION ========================
-const CONFIGURED_API_TOKEN = (process.env.API_TOKEN || process.env.AUTH_TOKEN || '').trim();
-
-function verifyApiToken(req) {
-  if (!CONFIGURED_API_TOKEN) {
-    return true; // No token set in environment, auth disabled
-  }
-
-  let clientToken = null;
-
-  // 1. Authorization: Bearer <token>
-  const authHeader = req.headers['authorization'];
-  if (authHeader && typeof authHeader === 'string') {
-    const parts = authHeader.split(' ');
-    if (parts.length === 2 && /^bearer$/i.test(parts[0])) {
-      clientToken = parts[1].trim();
-    }
-  }
-
-  // 2. Custom headers
-  if (!clientToken && req.headers['x-api-token']) {
-    clientToken = String(req.headers['x-api-token']).trim();
-  }
-  if (!clientToken && req.headers['x-api-key']) {
-    clientToken = String(req.headers['x-api-key']).trim();
-  }
-
-  // 3. Query parameter (essential for EventSource SSE, <img> previews, direct downloads)
-  if (!clientToken && req.query) {
-    if (req.query.token) clientToken = String(req.query.token).trim();
-    else if (req.query.apiKey) clientToken = String(req.query.apiKey).trim();
-    else if (req.query.api_key) clientToken = String(req.query.api_key).trim();
-  }
-
-  // 4. JSON request body
-  if (!clientToken && req.body && typeof req.body === 'object') {
-    if (req.body.token) clientToken = String(req.body.token).trim();
-    else if (req.body.apiToken) clientToken = String(req.body.apiToken).trim();
-    else if (req.body.apiKey) clientToken = String(req.body.apiKey).trim();
-  }
-
-  if (!clientToken) {
-    return false;
-  }
-
-  const clientBuf = Buffer.from(clientToken);
-  const configBuf = Buffer.from(CONFIGURED_API_TOKEN);
-
-  if (clientBuf.length !== configBuf.length) {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(clientBuf, configBuf);
-}
-
-function requireApiAuth(req, res, next) {
-  // CORS preflight requests must proceed
-  if (req.method === 'OPTIONS') {
-    return next();
-  }
-
-  if (!verifyApiToken(req)) {
-    return res.status(401).json({
-      success: false,
-      error: 'Unauthorized: Invalid or missing API token.'
-    });
-  }
-
-  next();
-}
-
-// Public auth check endpoint
-app.get('/api/auth/status', (req, res) => {
-  res.json({
-    success: true,
-    authRequired: Boolean(CONFIGURED_API_TOKEN),
-    authenticated: verifyApiToken(req)
-  });
-});
-
-// Protect all /api endpoints
-app.use('/api', requireApiAuth);
 
 // PDF & Document Studio API (isolated from FFmpeg routes)
 app.use('/api/pdf', createPdfRouter({
@@ -4672,11 +4589,6 @@ if (require.main === module) {
     console.log(`PDF & Docs Studio: http://localhost:${PORT}/pdf`);
     console.log(`Image Studio:      http://localhost:${PORT}/image`);
     console.log(`Network Access:    http://${localIP}:${PORT}`);
-    if (CONFIGURED_API_TOKEN) {
-      console.log('API Security:      Token Authentication ENABLED');
-    } else {
-      console.log('API Security:      Token Authentication DISABLED (set API_TOKEN to protect)');
-    }
     console.log('(Use the Network Access URL on other devices connected to the same Wi-Fi/Hotspot)');
     console.log('=========================================');
   });

@@ -1346,8 +1346,7 @@ function populateSelectedMediaUI(data) {
   const tgtFallback = document.getElementById('targetMediaIconFallback');
 
   if (isVideo) {
-    const rawThumb = `/api/get-thumbnail?path=${encodeURIComponent(selectedMedia.filePath)}`;
-    const thumbUrl = window.appendStudioToken ? window.appendStudioToken(rawThumb) : rawThumb;
+    const thumbUrl = `/api/get-thumbnail?path=${encodeURIComponent(selectedMedia.filePath)}`;
     if (selThumbImg) {
       selThumbImg.src = thumbUrl;
       selThumbImg.style.display = 'block';
@@ -2693,10 +2692,9 @@ function listenJobProgress(jobId) {
 
   const targetJobId = jobId || currentJobId;
   const sseUrl = targetJobId ? `/api/progress/${targetJobId}` : '/api/progress';
-  const fullSseUrl = window.appendStudioToken ? window.appendStudioToken(sseUrl) : sseUrl;
 
   try {
-    eventSource = new EventSource(fullSseUrl);
+    eventSource = new EventSource(sseUrl);
 
     eventSource.onopen = () => {
       console.log(`[SSE] Connected to ${sseUrl}`);
@@ -2799,8 +2797,7 @@ function handleJobCompleted(data) {
 
     if (['gif', 'png', 'jpg', 'jpeg'].includes(ext)) {
       const img = document.createElement('img');
-      const rawPreview = file.previewUrl || `/api/stream-file?path=${encodeURIComponent(file.path)}`;
-      img.src = window.appendStudioToken ? window.appendStudioToken(rawPreview) : rawPreview;
+      img.src = file.previewUrl || `/api/stream-file?path=${encodeURIComponent(file.path)}`;
       img.alt = 'Processed output';
       mediaPreviewContainer.appendChild(img);
     } else {
@@ -2827,8 +2824,7 @@ function handleJobCompleted(data) {
     };
 
     // Download / Save Button & Prominent Download Result Button
-    const rawDownload = file.downloadUrl || (file.isDirectPath ? `/api/download/${encodeURIComponent(outFilename)}?path=${encodeURIComponent(file.path)}` : `/api/download/${encodeURIComponent(outFilename)}`);
-    const downloadEndpoint = window.appendStudioToken ? window.appendStudioToken(rawDownload) : rawDownload;
+    const downloadEndpoint = file.downloadUrl || (file.isDirectPath ? `/api/download/${encodeURIComponent(outFilename)}?path=${encodeURIComponent(file.path)}` : `/api/download/${encodeURIComponent(outFilename)}`);
 
     if (btnProminentDownload) {
       btnProminentDownload.href = downloadEndpoint;
@@ -2996,10 +2992,8 @@ function renderHistory(jobs) {
         </span>
       `;
       if (job.status === 'completed') {
-        const rawStream = `/api/stream-file?path=${encodeURIComponent(job.outputFile.path)}&download=1`;
-        const streamUrl = window.appendStudioToken ? window.appendStudioToken(rawStream) : rawStream;
         downloadLink = `
-          <a href="${escapeHtml(streamUrl)}" download="${escapeHtml(baseName)}" class="btn-secondary btn-sm" style="text-decoration:none; display:inline-flex; align-items:center; gap:4px;">
+          <a href="/api/stream-file?path=${encodeURIComponent(job.outputFile.path)}&download=1" download="${escapeHtml(baseName)}" class="btn-secondary btn-sm" style="text-decoration:none; display:inline-flex; align-items:center; gap:4px;">
             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
               <polyline points="7 10 12 15 17 10"></polyline>

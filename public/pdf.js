@@ -41,8 +41,7 @@
   }
 
   function fileUrl(filePath, download) {
-    const raw = `/api/pdf/download?path=${encodeURIComponent(filePath)}${download ? '&download=1' : ''}`;
-    return window.appendStudioToken ? window.appendStudioToken(raw) : raw;
+    return `/api/pdf/download?path=${encodeURIComponent(filePath)}${download ? '&download=1' : ''}`;
   }
 
   function showToast(message, type) {
