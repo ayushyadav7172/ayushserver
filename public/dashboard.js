@@ -16,7 +16,6 @@
   const btnSaveConcurrency = document.getElementById('btnSaveConcurrency');
   const inputConcurrency = document.getElementById('inputConcurrency');
   const btnTriggerCleanup = document.getElementById('btnTriggerCleanup');
-  const btnTriggerBackup = document.getElementById('btnTriggerBackup');
   const btnClearErrors = document.getElementById('btnClearErrors');
 
   // 1. Theme toggle
@@ -190,28 +189,6 @@
       } finally {
         btnTriggerCleanup.disabled = false;
         btnTriggerCleanup.textContent = 'Run Cleanup';
-      }
-    });
-  }
-
-  // 6. Trigger backup button
-  if (btnTriggerBackup) {
-    btnTriggerBackup.addEventListener('click', async () => {
-      btnTriggerBackup.disabled = true;
-      btnTriggerBackup.textContent = 'Backing up...';
-      try {
-        const res = await fetch('/api/backup/run', { method: 'POST' });
-        const data = await res.json();
-        if (data.success) {
-          alert(`Backup created successfully: ${data.backup.filename}`);
-        } else {
-          alert('Backup failed: ' + (data.error || 'Unknown error'));
-        }
-      } catch (e) {
-        alert('Backup error: ' + e.message);
-      } finally {
-        btnTriggerBackup.disabled = false;
-        btnTriggerBackup.textContent = 'Backup DB';
       }
     });
   }
