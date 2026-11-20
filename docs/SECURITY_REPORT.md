@@ -48,7 +48,7 @@ All runtime production dependencies have been verified clean with zero reported 
   - `nodemon` is strictly a development-only tool (`devDependencies`) executed locally on the developer's Termux console via `npm run dev`.
   - In production (`npm start`), `node server.js` is executed directly without `nodemon`.
   - Glob patterns monitored by nodemon are hardcoded in `nodemon.json` and never accept external user input.
-- **Recommendation:** Do not run `npm audit fix --force` as it attempts to downgrade nodemon to an older version. Dependabot is configured in `.github/dependabot.yml` to automatically adopt upstream patches once nodemon updates its subdependency tree.
+- **Recommendation:** Do not run `npm audit fix --force` as it attempts to downgrade nodemon to an older version. Wait for upstream nodemon releases to update its subdependency tree naturally.
 
 ---
 
