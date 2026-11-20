@@ -14,3 +14,7 @@ temp_thumbs/*
 *.log
 *.tmp
 backup*.tar.gz
+database/*.db*
+!database/.gitkeep
+backups/*.db*
+!backups/.gitkeep

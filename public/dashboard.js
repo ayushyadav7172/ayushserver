@@ -1,0 +1,286 @@
+'use strict';
+
+(function () {
+  let refreshTimer = null;
+
+  // Theme toggle
+  const themeToggle = document.getElementById('themeToggle');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('ffstudio-theme', next);
+    });
+  }
+
+  // Refresh interval select
+  const refreshIntervalSelect = document.getElementById('refreshInterval');
+  if (refreshIntervalSelect) {
+    refreshIntervalSelect.addEventListener('change', (e) => {
+      setupAutoRefresh(parseInt(e.target.value, 10));
+    });
+  }
+
+  // Manual refresh button
+  const btnManualRefresh = document.getElementById('btnManualRefresh');
+  if (btnManualRefresh) {
+    btnManualRefresh.addEventListener('click', () => {
+      fetchDashboardStats();
+    });
+  }
+
+  // Set concurrency button
+  const btnSaveConcurrency = document.getElementById('btnSaveConcurrency');
+  const inputConcurrency = document.getElementById('inputConcurrency');
+  if (btnSaveConcurrency && inputConcurrency) {
+    btnSaveConcurrency.addEventListener('click', async () => {
+      const val = parseInt(inputConcurrency.value, 10);
+      if (isNaN(val) || val < 1 || val > 10) {
+        alert('Please enter a concurrency value between 1 and 10');
+        return;
+      }
+      try {
+        const res = await fetch('/api/queue/concurrency', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: val })
+        });
+        const data = await res.json();
+        if (data.success) {
+          fetchDashboardStats();
+        } else {
+          alert('Failed to update concurrency: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    });
+  }
+
+  // Run cleanup button
+  const btnTriggerCleanup = document.getElementById('btnTriggerCleanup');
+  if (btnTriggerCleanup) {
+    btnTriggerCleanup.addEventListener('click', async () => {
+      btnTriggerCleanup.disabled = true;
+      btnTriggerCleanup.textContent = 'Cleaning...';
+      try {
+        const res = await fetch('/api/cleanup/run', { method: 'POST' });
+        const data = await res.json();
+        alert(`Cleanup finished: ${data.totalDeleted || 0} files deleted.`);
+        fetchDashboardStats();
+      } catch (e) {
+        alert('Cleanup error: ' + e.message);
+      } finally {
+        btnTriggerCleanup.disabled = false;
+        btnTriggerCleanup.textContent = 'Run Cleanup';
+      }
+    });
+  }
+
+  // Trigger backup button
+  const btnTriggerBackup = document.getElementById('btnTriggerBackup');
+  if (btnTriggerBackup) {
+    btnTriggerBackup.addEventListener('click', async () => {
+      btnTriggerBackup.disabled = true;
+      btnTriggerBackup.textContent = 'Backing up...';
+      try {
+        const res = await fetch('/api/backup/run', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          alert(`Backup created successfully: ${data.backup.filename}`);
+        } else {
+          alert('Backup failed: ' + (data.error || 'Unknown error'));
+        }
+      } catch (e) {
+        alert('Backup error: ' + e.message);
+      } finally {
+        btnTriggerBackup.disabled = false;
+        btnTriggerBackup.textContent = 'Backup DB';
+      }
+    });
+  }
+
+  function formatDuration(sec) {
+    const s = Math.floor(sec % 60);
+    const m = Math.floor((sec / 60) % 60);
+    const h = Math.floor((sec / 3600) % 24);
+    const d = Math.floor(sec / 86400);
+    const parts = [];
+    if (d > 0) parts.push(`${d}d`);
+    if (h > 0) parts.push(`${h}h`);
+    if (m > 0) parts.push(`${m}m`);
+    parts.push(`${s}s`);
+    return parts.join(' ');
+  }
+
+  async function fetchDashboardStats() {
+    try {
+      const res = await fetch('/api/analytics/stats');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      renderDashboard(data);
+    } catch (e) {
+      console.warn('[Dashboard] Failed to fetch stats:', e.message);
+      const badge = document.getElementById('serverStatusBadge');
+      const text = document.getElementById('serverStatusText');
+      if (badge && text) {
+        badge.className = 'status-badge status-danger';
+        text.textContent = 'Offline';
+      }
+    }
+  }
+
+  function renderDashboard(data) {
+    // 1. Server status & uptime
+    const serverBadge = document.getElementById('serverStatusBadge');
+    const serverText = document.getElementById('serverStatusText');
+    const uptimeBadge = document.getElementById('uptimeBadge');
+
+    if (serverBadge && serverText) {
+      serverBadge.className = 'status-badge status-healthy';
+      serverText.textContent = 'Online';
+    }
+
+    if (uptimeBadge && data.server) {
+      uptimeBadge.textContent = 'Uptime: ' + formatDuration(data.server.uptimeSeconds || 0);
+    }
+
+    // 2. Stat Cards
+    const completedEl = document.getElementById('statCompletedJobs');
+    const successRateEl = document.getElementById('statSuccessRate');
+    if (completedEl && data.processing) {
+      completedEl.textContent = data.processing.completedJobs || 0;
+      const total = data.processing.totalJobs || 0;
+      const success = data.processing.completedJobs || 0;
+      const rate = total > 0 ? Math.round((success / total) * 100) : 100;
+      if (successRateEl) {
+        successRateEl.textContent = `Success rate: ${rate}% (${total} total)`;
+      }
+    }
+
+    const activeEl = document.getElementById('statActiveJobs');
+    const queuedEl = document.getElementById('statQueuedJobs');
+    if (activeEl && data.ffmpeg) {
+      activeEl.textContent = `${data.ffmpeg.activeWorkers || 0} / ${data.ffmpeg.maxConcurrency || 1}`;
+      if (inputConcurrency) {
+        inputConcurrency.value = data.ffmpeg.maxConcurrency || 1;
+      }
+    }
+    if (queuedEl && data.processing) {
+      queuedEl.textContent = `${data.processing.queuedJobs || 0} jobs waiting in queue`;
+    }
+
+    const procRamEl = document.getElementById('statProcessRam');
+    const heapRamEl = document.getElementById('statHeapRam');
+    if (procRamEl && data.server?.processMemory) {
+      procRamEl.textContent = data.server.processMemory.rssFormatted || '0 MB';
+      if (heapRamEl) {
+        heapRamEl.textContent = `Heap: ${data.server.processMemory.heapUsedFormatted || '0 MB'}`;
+      }
+    }
+
+    const freeStorageEl = document.getElementById('statFreeStorage');
+    const totalStorageEl = document.getElementById('statTotalStorage');
+    if (freeStorageEl && data.storage?.diskStorage) {
+      freeStorageEl.textContent = data.storage.diskStorage.freeFormatted || '0 GB';
+      if (totalStorageEl) {
+        totalStorageEl.textContent = `Total capacity: ${data.storage.diskStorage.totalFormatted || '0 GB'}`;
+      }
+    }
+
+    // 3. System Metrics Panel
+    const platformEl = document.getElementById('metricPlatform');
+    if (platformEl && data.server) {
+      platformEl.textContent = `${data.server.platform || 'Linux'} ${data.server.isTermux ? '(Termux)' : ''}`;
+    }
+
+    const nodeEl = document.getElementById('metricNodeVersion');
+    if (nodeEl && data.server) {
+      nodeEl.textContent = data.server.nodeVersion || '';
+    }
+
+    const ramLoadEl = document.getElementById('metricSystemRamLoad');
+    const progressRamEl = document.getElementById('progressSystemRam');
+    if (ramLoadEl && data.server?.systemMemory) {
+      const pct = data.server.systemMemory.usedPercent || 0;
+      ramLoadEl.textContent = `${pct}% (${data.server.systemMemory.freeFormatted} free)`;
+      if (progressRamEl) {
+        progressRamEl.style.width = `${pct}%`;
+        progressRamEl.style.background = pct > 85 ? 'var(--dash-danger)' : (pct > 70 ? 'var(--dash-warning)' : 'var(--dash-primary)');
+      }
+    }
+
+    // 4. Processing Metrics Panel
+    const qCountEl = document.getElementById('metricQueuedCount');
+    if (qCountEl && data.processing) qCountEl.textContent = data.processing.queuedJobs || 0;
+
+    const actCountEl = document.getElementById('metricActiveWorkers');
+    if (actCountEl && data.ffmpeg) actCountEl.textContent = data.ffmpeg.activeWorkers || 0;
+
+    const avgDurEl = document.getElementById('metricAvgDuration');
+    if (avgDurEl && data.processing) avgDurEl.textContent = `${data.processing.avgProcessingTimeSeconds || 0}s`;
+
+    const mediaSizeEl = document.getElementById('metricTotalMediaSize');
+    if (mediaSizeEl && data.processing) mediaSizeEl.textContent = data.processing.totalProcessedMediaSize || '0 B';
+
+    // 5. Storage Panel
+    const appStorageBadge = document.getElementById('appStorageBadge');
+    if (appStorageBadge && data.storage?.totalAppStorage) {
+      appStorageBadge.textContent = `${data.storage.totalAppStorage.formatted} used`;
+    }
+
+    const sTempEl = document.getElementById('storageTempUploads');
+    if (sTempEl && data.storage?.tempUploads) sTempEl.textContent = data.storage.tempUploads.formatted || '0 B';
+
+    const sProcEl = document.getElementById('storageProcessed');
+    if (sProcEl && data.storage?.processed) sProcEl.textContent = data.storage.processed.formatted || '0 B';
+
+    const sPdfEl = document.getElementById('storagePdfOutputs');
+    if (sPdfEl && data.storage?.pdfOutputs) sPdfEl.textContent = data.storage.pdfOutputs.formatted || '0 B';
+
+    const sThumbsEl = document.getElementById('storageThumbs');
+    if (sThumbsEl && data.storage?.tempThumbs) sThumbsEl.textContent = data.storage.tempThumbs.formatted || '0 B';
+
+    const sRetentionEl = document.getElementById('storageRetention');
+    if (sRetentionEl && data.storage) sRetentionEl.textContent = `${data.storage.retentionMinutes || 30} minutes`;
+
+    // 6. Recent Errors Panel
+    const errorContainer = document.getElementById('errorListContainer');
+    const errorBadge = document.getElementById('errorCountBadge');
+    const recentErrors = data.processing?.recentErrors || [];
+
+    if (errorBadge) {
+      errorBadge.textContent = `${recentErrors.length} Issue(s)`;
+      errorBadge.className = recentErrors.length > 0 ? 'status-badge status-warning' : 'status-badge status-healthy';
+    }
+
+    if (errorContainer) {
+      if (recentErrors.length === 0) {
+        errorContainer.innerHTML = '<div style="color:var(--dash-muted); padding:16px 0; text-align:center;">No recent errors or warnings. Server is running smoothly.</div>';
+      } else {
+        errorContainer.innerHTML = recentErrors.map(err => `
+          <div class="error-item">
+            <div><strong>${err.name || 'Job error'}</strong> (${err.operation || 'process'}):</div>
+            <div style="color:var(--dash-danger); margin-top:2px;">${err.error || 'Unknown error'}</div>
+            <div style="color:var(--dash-muted); font-size:11px; margin-top:2px;">${new Date(err.completedAt).toLocaleTimeString()}</div>
+          </div>
+        `).join('');
+      }
+    }
+  }
+
+  function setupAutoRefresh(intervalMs) {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+    if (intervalMs > 0) {
+      refreshTimer = setInterval(fetchDashboardStats, intervalMs);
+    }
+  }
+
+  // Initial load
+  fetchDashboardStats();
+  setupAutoRefresh(10000);
+})();

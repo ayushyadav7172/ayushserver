@@ -10,6 +10,13 @@ const sharp = require('sharp');
 const multer = require('multer');
 const { createPdfRouter } = require('./pdf-routes');
 const { wakeLockManager } = require('./wake-lock');
+const { databaseManager } = require('./database/database');
+const { jobManager } = require('./services/job-manager');
+const { queueManager } = require('./services/queue-manager');
+const { cleanupManager } = require('./services/cleanup-manager');
+const { backupManager } = require('./services/backup-manager');
+const { healthMonitor } = require('./services/health-monitor');
+const { analyticsService } = require('./services/analytics-service');
 
 const app = express();
 app.disable('x-powered-by');
@@ -248,6 +255,22 @@ app.get('/index.html', (req, res) => {
   res.redirect(302, '/');
 });
 
+app.get(['/dashboard', '/dashboard/', '/dashboard.html'], (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'dashboard.html'));
+});
+
+app.get(['/docs', '/docs/', '/docs.html'], (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'docs.html'));
+});
+
+app.get('/docs/openapi.yaml', (req, res) => {
+  res.sendFile(path.join(__dirname, 'docs', 'openapi.yaml'));
+});
+
+app.get('/docs/API.md', (req, res) => {
+  res.sendFile(path.join(__dirname, 'docs', 'API.md'));
+});
+
 // Allowed Media Extensions for File Explorer
 const ALLOWED_MEDIA_EXTS = new Set([
   '.mp4', '.mkv', '.avi', '.mov', '.webm',
@@ -427,9 +450,9 @@ const concurrencyLock = {
         throw err;
       }
     }
-    if (this.isMediaProcessing()) {
-      const err = new Error('A media conversion process is already running. Please wait for it to finish or cancel it.');
-      err.status = 409;
+    if (queueManager && queueManager.queue && queueManager.queue.length >= queueManager.maxQueueSize) {
+      const err = new Error(`Queue is full (maximum ${queueManager.maxQueueSize} queued jobs). Please wait for current jobs to finish.`);
+      err.status = 429;
       throw err;
     }
   },
@@ -706,7 +729,10 @@ function runAutoCleanup() {
 runAutoCleanup();
 
 // Background setInterval every 2 minutes
-setInterval(runAutoCleanup, 2 * 60 * 1000);
+const autoCleanupTimer = setInterval(runAutoCleanup, 2 * 60 * 1000);
+if (autoCleanupTimer && autoCleanupTimer.unref) {
+  autoCleanupTimer.unref();
+}
 
 // ======================== MULTER CONFIGURATION ========================
 // Strict filename sanitizer: strips null bytes, path traversal, control chars, limits length
@@ -1908,7 +1934,7 @@ function notifyJobSubscribers(jobId, payload) {
 }
 
 // Heartbeat for SSE clients
-setInterval(() => {
+const sseHeartbeatTimer = setInterval(() => {
   for (const client of globalSseClients) {
     try {
       client.write(': keepalive\n\n');
@@ -1922,9 +1948,12 @@ setInterval(() => {
     }
   }
 }, 15000);
+if (sseHeartbeatTimer && sseHeartbeatTimer.unref) {
+  sseHeartbeatTimer.unref();
+}
 
 // Periodic cleanup: prune old completed/failed jobs from memory (keep last 50)
-setInterval(() => {
+const jobPruneTimer = setInterval(() => {
   if (jobs.size > 50) {
     const allJobs = Array.from(jobs.entries())
       .sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
@@ -1938,6 +1967,9 @@ setInterval(() => {
     }
   }
 }, 300000); // Every 5 minutes
+if (jobPruneTimer && jobPruneTimer.unref) {
+  jobPruneTimer.unref();
+}
 
 // Helper to extract relevant error line from raw FFmpeg stderr output
 function extractFfmpegError(stderr) {
@@ -3458,7 +3490,7 @@ app.get('/api/info', (req, res) => {
 // GET /api/browse?dir=/sdcard/
 app.get('/api/browse', (req, res) => {
   try {
-    const rawDir = req.query.dir ? String(req.query.dir).trim() : '/sdcard';
+    const rawDir = (req.query.dir || req.query.path) ? String(req.query.dir || req.query.path).trim() : '/sdcard';
     const requestedKind = String(req.query.kind || 'media').toLowerCase();
     const activeKind = BROWSE_FILTERS[requestedKind] ? requestedKind : 'media';
     const allowedExtensions = BROWSE_FILTERS[activeKind];
@@ -3970,9 +4002,11 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
 
     jobs.set(jobId, job);
 
-    executeJob(job).catch(err => {
-      console.error(`[Process Direct] Job ${jobId} failed:`, err.message);
-    });
+    try {
+      queueManager.enqueue(job);
+    } catch (qErr) {
+      return res.status(qErr.status || 500).json({ success: false, error: qErr.message });
+    }
 
     res.json({
       success: true,
@@ -4107,9 +4141,11 @@ app.post('/api/run-custom', async (req, res) => {
 
     jobs.set(jobId, job);
 
-    executeJob(job).catch(err => {
-      console.error(`[Run Custom] Job ${jobId} failed:`, err.message);
-    });
+    try {
+      queueManager.enqueue(job);
+    } catch (qErr) {
+      return res.status(qErr.status || 500).json({ success: false, error: qErr.message });
+    }
 
     res.json({
       success: true,
@@ -4145,6 +4181,19 @@ app.post('/api/cancel-job', (req, res) => {
       });
     }
 
+    // Check if target is in waiting queue
+    if (job && job.status === 'queued') {
+      queueManager.cancelJob(targetJobId, clientSessionId);
+      job.status = 'cancelled';
+      job.completedAt = Date.now();
+      job.error = 'Cancelled while waiting in queue';
+      return res.json({
+        success: true,
+        message: 'Queued job cancelled.',
+        activeJob: formatJobForClient(activeJob)
+      });
+    }
+
     // Only treat this as a real cancellation when something is actually
     // running. Otherwise a stray request (or a stale Stop click) would mark a
     // finished job as cancelled and — worse — delete its completed output file.
@@ -4175,6 +4224,10 @@ app.post('/api/cancel-job', (req, res) => {
     // Update global activeJob state
     activeJob.status = 'cancelled';
     activeJob.error = 'Conversion cancelled by user';
+
+    try {
+      queueManager.cancelJob(targetJobId || activeJob.jobId, clientSessionId);
+    } catch (e) {}
 
     // Forcefully kill active FFmpeg process if running
     if (currentFFmpegProcess) {
@@ -4454,49 +4507,74 @@ app.get('/api/stream-file', (req, res) => {
   }
 });
 
-// 8. Job History & Logs (Session-Isolated)
+// 8. Job History & Logs (Persistent SQLite & Session-Isolated)
 app.get('/api/jobs', (req, res) => {
   const sessionId = req.headers['x-session-id'] || req.query.sessionId;
-  let all = Array.from(jobs.values());
-  if (sessionId) {
-    all = all.filter(j => j.sessionId === sessionId);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  try {
+    const dbJobs = databaseManager.getJobs({ sessionId, limit });
+    const formatted = dbJobs.map(j => ({
+      id: j.id,
+      name: j.name,
+      operation: j.operation,
+      status: j.status,
+      isDirectPath: true,
+      createdAt: j.createdAt,
+      startedAt: j.startedAt,
+      completedAt: j.completedAt,
+      durationMs: j.durationMs,
+      commandString: j.commandString,
+      outputFile: j.outputFile,
+      error: j.error
+    }));
+    res.json({ jobs: formatted });
+  } catch (err) {
+    // Fallback to in-memory jobs if DB lookup fails
+    let all = Array.from(jobs.values());
+    if (sessionId) {
+      all = all.filter(j => j.sessionId === sessionId);
+    }
+    const jobList = all.map(j => ({
+      id: j.id,
+      name: j.name,
+      operation: j.operation,
+      status: j.status,
+      isDirectPath: true,
+      createdAt: j.createdAt,
+      startedAt: j.startedAt,
+      completedAt: j.completedAt,
+      durationMs: j.durationMs,
+      commandString: j.commandString,
+      outputFile: j.outputFile,
+      error: j.error
+    })).reverse().slice(0, limit);
+    res.json({ jobs: jobList });
   }
-  const jobList = all.map(j => ({
-    id: j.id,
-    name: j.name,
-    operation: j.operation,
-    status: j.status,
-    isDirectPath: true,
-    createdAt: j.createdAt,
-    startedAt: j.startedAt,
-    completedAt: j.completedAt,
-    durationMs: j.durationMs,
-    commandString: j.commandString,
-    outputFile: j.outputFile,
-    error: j.error
-  })).reverse().slice(0, 20);
-
-  res.json({ jobs: jobList });
 });
 
 app.get('/api/jobs/:id/logs', (req, res) => {
-  const job = jobs.get(req.params.id);
+  const jobId = req.params.id;
+  const job = jobs.get(jobId) || jobManager.getJob(jobId);
   if (!job) return res.status(404).json({ error: 'Job not found' });
   const sessionId = req.headers['x-session-id'] || req.query.sessionId;
   if (sessionId && job.sessionId && job.sessionId !== sessionId) {
     return res.status(403).json({ error: 'Unauthorized to view logs for this job' });
   }
+  const persistentLogs = jobManager.getLogs(jobId);
+  const memLogs = (job.logs || []).join('');
+  const finalLogs = persistentLogs || memLogs;
+
   res.json({
     id: job.id,
     name: job.name,
     commandString: job.commandString,
-    logs: (job.logs || []).join(''),
+    logs: finalLogs,
     stderr: job.stderr || (job.logs ? job.logs.slice(-50).join('') : ''),
     status: job.status
   });
 });
 
-// Clear Job History (Session-Isolated)
+// Clear Job History (Session-Isolated & Persistent)
 app.delete('/api/jobs', (req, res) => {
   const sessionId = req.headers['x-session-id'] || req.query.sessionId;
   if (sessionId) {
@@ -4507,21 +4585,109 @@ app.delete('/api/jobs', (req, res) => {
         count++;
       }
     }
+    jobManager.clearJobs(sessionId);
     return res.json({ success: true, message: `Cleared ${count} job(s) for your session` });
   }
   jobs.clear();
+  jobManager.clearJobs();
   res.json({ success: true, message: 'All job history cleared' });
 });
 
 app.delete('/api/jobs/:id', (req, res) => {
-  const job = jobs.get(req.params.id);
+  const jobId = req.params.id;
+  const job = jobs.get(jobId) || jobManager.getJob(jobId);
   if (!job) return res.json({ success: false, message: 'Job not found' });
   const sessionId = req.headers['x-session-id'] || req.query.sessionId;
   if (sessionId && job.sessionId && job.sessionId !== sessionId) {
     return res.status(403).json({ error: 'Unauthorized to delete this job' });
   }
-  jobs.delete(req.params.id);
+  jobs.delete(jobId);
+  jobManager.deleteJob(jobId, sessionId);
   res.json({ success: true, message: 'Job log deleted' });
+});
+
+// ==================== QUEUE MANAGEMENT API ====================
+app.get('/api/queue/status', (req, res) => {
+  res.json(queueManager.getStatus());
+});
+
+app.post('/api/queue/concurrency', (req, res) => {
+  try {
+    const { limit } = req.body;
+    const newLimit = queueManager.setConcurrency(limit);
+    res.json({ success: true, maxConcurrency: newLimit });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// ==================== HEALTH MONITORING API ====================
+app.get('/api/health', (req, res) => {
+  const summary = healthMonitor.getHealthSummary();
+  const statusCode = summary.status === 'unhealthy' ? 503 : 200;
+  res.status(statusCode).json(summary);
+});
+
+app.get('/api/health/live', (req, res) => {
+  res.json(healthMonitor.getLiveness());
+});
+
+app.get('/api/health/ready', (req, res) => {
+  const ready = healthMonitor.getReadiness();
+  res.status(ready.ready ? 200 : 503).json(ready);
+});
+
+// ==================== ANALYTICS API ====================
+app.get('/api/analytics/stats', (req, res) => {
+  res.json(analyticsService.getDashboardStats());
+});
+
+// ==================== APPLICATION BACKUPS API ====================
+app.get('/api/backup/list', (req, res) => {
+  res.json({ backups: backupManager.getBackupsList() });
+});
+
+app.post('/api/backup/run', async (req, res) => {
+  try {
+    const backup = await backupManager.createBackup();
+    res.json({ success: true, backup });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/backup/restore', async (req, res) => {
+  try {
+    const { backupId, confirm } = req.body;
+    const result = await backupManager.restoreBackup(backupId, confirm);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// ==================== CENTRALIZED CLEANUP API ====================
+app.get('/api/cleanup/stats', (req, res) => {
+  res.json(cleanupManager.getStorageStats());
+});
+
+app.post('/api/cleanup/run', async (req, res) => {
+  try {
+    const result = await cleanupManager.runCleanup({ force: Boolean(req.body?.force) });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/cleanup/retention', (req, res) => {
+  try {
+    const { minutes } = req.body;
+    const retentionMs = cleanupManager.setRetention(minutes);
+    res.json({ success: true, retentionMinutes: Math.round(retentionMs / 60000) });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
 });
 
 app.use((err, req, res, next) => {
@@ -4578,6 +4744,38 @@ function getLocalIP() {
   return 'localhost';
 }
 
+// Background Services Initialization
+function initServices() {
+  try {
+    databaseManager.init();
+    jobManager.recoverInterruptedJobs();
+    cleanupManager.init(filePath => isFileInActiveProcessing(filePath));
+    backupManager.init();
+    queueManager.setExecutor(executeJob);
+    console.log('[Services] Database, Queue, Cleanup, and Backup managers initialized.');
+  } catch (err) {
+    console.error('[Services] Failed to initialize background services:', err.message);
+  }
+}
+
+initServices();
+
+// Graceful Shutdown
+function gracefulShutdown(signal) {
+  console.log(`[Server] Received ${signal}, starting graceful shutdown...`);
+  try {
+    queueManager.shutdown();
+    cleanupManager.stopScheduler();
+    backupManager.stopScheduler();
+    databaseManager.close();
+  } catch (e) {
+    console.warn('[Server] Error during graceful shutdown:', e.message);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
 // Start Server
 if (require.main === module) {
   app.listen(PORT, '0.0.0.0', () => {
@@ -4585,6 +4783,8 @@ if (require.main === module) {
     console.log('=========================================');
     console.log('Termux Utility Studio is running!');
     console.log(`Home:              http://localhost:${PORT}`);
+    console.log(`Dashboard:         http://localhost:${PORT}/dashboard`);
+    console.log(`API Docs:          http://localhost:${PORT}/docs`);
     console.log(`Media Studio:      http://localhost:${PORT}/media`);
     console.log(`PDF & Docs Studio: http://localhost:${PORT}/pdf`);
     console.log(`Image Studio:      http://localhost:${PORT}/image`);
@@ -4601,5 +4801,12 @@ module.exports = {
   isFileInActiveProcessing,
   cleanDirectory,
   runAutoCleanup,
-  isFileBeingWritten
+  isFileBeingWritten,
+  databaseManager,
+  jobManager,
+  queueManager,
+  cleanupManager,
+  backupManager,
+  healthMonitor,
+  analyticsService
 };

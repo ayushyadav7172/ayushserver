@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1115">
+  <title>Dashboard &amp; Analytics — Termux Utility Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/dashboard.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('ffstudio-theme');
+        if (t !== 'light' && t !== 'dark') {
+          t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Home">
+      <span class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+          <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+          <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+          <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
+        </svg>
+      </span>
+      <span class="brand-text">
+        <strong>Termux Utility Studio</strong>
+        <small>System &amp; Analytics</small>
+      </span>
+    </a>
+
+    <div class="topbar-actions">
+      <nav style="display:flex; gap:14px; margin-right:12px;">
+        <a href="/" style="color:var(--dash-muted); text-decoration:none; font-size:13px; font-weight:600;">Home</a>
+        <a href="/media" style="color:var(--dash-muted); text-decoration:none; font-size:13px; font-weight:600;">Media</a>
+        <a href="/pdf" style="color:var(--dash-muted); text-decoration:none; font-size:13px; font-weight:600;">PDF</a>
+        <a href="/image" style="color:var(--dash-muted); text-decoration:none; font-size:13px; font-weight:600;">Image</a>
+        <a href="/dashboard" style="color:var(--dash-primary); text-decoration:none; font-size:13px; font-weight:600;">Dashboard</a>
+        <a href="/docs" style="color:var(--dash-muted); text-decoration:none; font-size:13px; font-weight:600;">API Docs</a>
+      </nav>
+      <button id="themeToggle" class="icon-btn" type="button" title="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>
+        </svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="dashboard-container">
+    <div class="dashboard-header">
+      <div class="dashboard-title">
+        <h1>
+          <span>Live Analytics Dashboard</span>
+          <span id="serverStatusBadge" class="status-badge status-healthy">
+            <span class="pulse-dot"></span>
+            <span id="serverStatusText">Online</span>
+          </span>
+        </h1>
+        <p>Real-time performance, background job queues, storage utilization, and system health.</p>
+      </div>
+
+      <div class="dashboard-controls">
+        <select id="refreshInterval" class="select-dash">
+          <option value="5000">Refresh: 5s</option>
+          <option value="10000" selected>Refresh: 10s</option>
+          <option value="30000">Refresh: 30s</option>
+          <option value="0">Auto-refresh Off</option>
+        </select>
+        <button id="btnManualRefresh" class="btn-dash" type="button">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+          Refresh
+        </button>
+        <button id="btnTriggerCleanup" class="btn-dash" type="button">Run Cleanup</button>
+        <button id="btnTriggerBackup" class="btn-dash btn-dash-primary" type="button">Backup DB</button>
+      </div>
+    </div>
+
+    <!-- Quick Stats Cards -->
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">Completed Jobs</span>
+          <span class="stat-icon" style="color:var(--dash-success); background:rgba(34,197,94,0.1);">✓</span>
+        </div>
+        <div id="statCompletedJobs" class="stat-value">0</div>
+        <div id="statSuccessRate" class="stat-meta">Success rate: 100%</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">Active Workers</span>
+          <span class="stat-icon">⚡</span>
+        </div>
+        <div id="statActiveJobs" class="stat-value">0 / 1</div>
+        <div id="statQueuedJobs" class="stat-meta">0 jobs waiting in queue</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">Process RAM</span>
+          <span class="stat-icon" style="color:var(--dash-warning); background:rgba(245,158,11,0.1);">MEM</span>
+        </div>
+        <div id="statProcessRam" class="stat-value">0 MB</div>
+        <div id="statHeapRam" class="stat-meta">Heap: 0 MB</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">Free Storage</span>
+          <span class="stat-icon">💾</span>
+        </div>
+        <div id="statFreeStorage" class="stat-value">0 GB</div>
+        <div id="statTotalStorage" class="stat-meta">Total capacity: 0 GB</div>
+      </div>
+    </div>
+
+    <!-- Multi-Panel Sections -->
+    <div class="section-grid">
+      <!-- Panel 1: Server & System -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <h2>Server &amp; System Health</h2>
+          <span id="uptimeBadge" class="status-badge status-healthy">Uptime: 0s</span>
+        </div>
+        <div class="metrics-list">
+          <div class="metric-item">
+            <span class="metric-label">Platform / Environment</span>
+            <span id="metricPlatform" class="metric-value">Android (Termux)</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Node.js Engine</span>
+            <span id="metricNodeVersion" class="metric-value">v26.13.1</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">System Memory Load</span>
+            <span id="metricSystemRamLoad" class="metric-value">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div id="progressSystemRam" class="progress-bar-fill" style="width: 0%;"></div>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">SQLite WAL Database</span>
+            <span id="metricDatabaseStatus" class="metric-value" style="color:var(--dash-success);">Healthy (WAL mode)</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">FFmpeg Binary</span>
+            <span id="metricFfmpegStatus" class="metric-value" style="color:var(--dash-success);">Detected</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 2: FFmpeg Queue & Concurrency -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <h2>FFmpeg Queue Control</h2>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <label style="font-size:12px; color:var(--dash-muted);">Concurrency:</label>
+            <input id="inputConcurrency" type="number" min="1" max="10" value="1" style="width:50px; padding:4px 6px; border-radius:6px; border:1px solid var(--dash-border); background:var(--dash-bg); color:var(--dash-text); text-align:center;">
+            <button id="btnSaveConcurrency" class="btn-dash" style="padding:4px 10px; font-size:11px;">Set</button>
+          </div>
+        </div>
+        <div class="metrics-list">
+          <div class="metric-item">
+            <span class="metric-label">Queued Jobs</span>
+            <span id="metricQueuedCount" class="metric-value">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Active Processes</span>
+            <span id="metricActiveWorkers" class="metric-value">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Avg Processing Time</span>
+            <span id="metricAvgDuration" class="metric-value">0s</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Total Processed Media Size</span>
+            <span id="metricTotalMediaSize" class="metric-value">0 B</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-grid">
+      <!-- Panel 3: Storage Breakdown -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <h2>Application Storage Footprint</h2>
+          <span id="appStorageBadge" class="status-badge" style="background:rgba(56,189,248,0.1); color:var(--dash-primary);">0 MB used</span>
+        </div>
+        <div class="metrics-list">
+          <div class="metric-item">
+            <span class="metric-label">Temporary Uploads (temp_uploads)</span>
+            <span id="storageTempUploads" class="metric-value">0 B</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Processed Output (processed)</span>
+            <span id="storageProcessed" class="metric-value">0 B</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">PDF Outputs (pdf_outputs)</span>
+            <span id="storagePdfOutputs" class="metric-value">0 B</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Thumbnail Cache (temp_thumbs)</span>
+            <span id="storageThumbs" class="metric-value">0 B</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Retention Period</span>
+            <span id="storageRetention" class="metric-value">30 minutes</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 4: Recent Errors & Warnings -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <h2>System Warnings &amp; Errors</h2>
+          <span id="errorCountBadge" class="status-badge status-healthy">0 Warnings</span>
+        </div>
+        <div id="errorListContainer" class="error-list">
+          <div style="color:var(--dash-muted); padding:16px 0; text-align:center;">No recent errors or warnings. Server is running smoothly.</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/dashboard.js"></script>
+</body>
+</html>

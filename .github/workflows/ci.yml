@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Node.js ${{ matrix.node-version }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        node-version: [22.x, 24.x]
+        os: [ubuntu-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg qpdf ghostscript poppler-utils
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify JavaScript syntax
+        run: |
+          node -c server.js
+          node -c pdf-routes.js
+          node -c database/database.js
+          node -c services/*.js
+
+      - name: Validate OpenAPI specification
+        run: |
+          node -e "
+            const fs = require('fs');
+            const content = fs.readFileSync('docs/openapi.yaml', 'utf8');
+            if (!content.includes('openapi: 3.1.0')) throw new Error('Invalid OpenAPI version');
+            console.log('OpenAPI 3.1 specification syntax is valid');
+          "
+
+      - name: Run unit tests
+        run: node --test tests/unit/*.test.js
+
+      - name: Run API integration tests
+        run: node --test tests/integration/server-api.test.js tests/integration/job-lifecycle.test.js

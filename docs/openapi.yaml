@@ -1,0 +1,370 @@
+openapi: 3.1.0
+info:
+  title: Termux Utility Studio API
+  version: 2.0.0
+  description: >
+    Production-grade local media processing, document manipulation, image studio,
+    queue management, server health monitoring, and analytics API designed for Android Termux
+    and local Wi-Fi / LAN environments. Authentication-free, zero-friction LAN access.
+servers:
+  - url: http://localhost:3000
+    description: Termux Localhost
+  - url: http://{LAN_IP}:3000
+    description: Local Wi-Fi / LAN Network Access
+    variables:
+      LAN_IP:
+        default: 192.168.1.100
+        description: Phone's Wi-Fi or Hotspot IP address
+
+paths:
+  /api/health:
+    get:
+      summary: Comprehensive Server Health Check
+      description: Returns health status of database, FFmpeg, memory usage, queue status, and active system warnings.
+      responses:
+        '200':
+          description: Server is healthy or degraded with non-critical warnings
+        '503':
+          description: Server is unhealthy (critical service unavailable)
+
+  /api/health/live:
+    get:
+      summary: Liveness Probe
+      description: Lightweight liveness check for process uptime.
+      responses:
+        '200':
+          description: Application process is running
+
+  /api/health/ready:
+    get:
+      summary: Readiness Probe
+      description: Readiness check verifying database connection and storage availability.
+      responses:
+        '200':
+          description: Server is ready to accept traffic
+        '503':
+          description: Database or primary storage is not ready
+
+  /api/analytics/stats:
+    get:
+      summary: Dashboard Analytics Statistics
+      description: Returns server metrics, processing job counts, queue performance, and disk usage statistics.
+      responses:
+        '200':
+          description: Real-time aggregated statistics
+
+  /api/queue/status:
+    get:
+      summary: Queue and Concurrency Status
+      description: Returns current queue length, active workers, concurrency limit, and active job details.
+      responses:
+        '200':
+          description: Queue status details
+
+  /api/queue/concurrency:
+    post:
+      summary: Update Maximum Concurrent FFmpeg Jobs
+      description: Sets the concurrency limit (1-10) for FFmpeg job execution. Persisted to SQLite.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [limit]
+              properties:
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+      responses:
+        '200':
+          description: Concurrency updated successfully
+        '400':
+          description: Invalid concurrency value
+
+  /api/backup/list:
+    get:
+      summary: List Application Backups
+      description: Returns a list of database snapshots with size, SHA-256 checksums, and verification status.
+      responses:
+        '200':
+          description: List of backups
+
+  /api/backup/run:
+    post:
+      summary: Create Application Backup
+      description: Triggers an immediate atomic SQLite backup using VACUUM INTO, verifies SHA-256 integrity, and prunes older backups.
+      responses:
+        '200':
+          description: Backup created successfully
+        '500':
+          description: Backup failed
+
+  /api/backup/restore:
+    post:
+      summary: Restore Database from Backup
+      description: Validates backup checksum, creates a safety snapshot of the active database, and restores data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [backupId, confirm]
+              properties:
+                backupId:
+                  type: string
+                confirm:
+                  type: boolean
+      responses:
+        '200':
+          description: Restore completed successfully
+        '400':
+          description: Missing explicit confirmation or invalid backup ID
+
+  /api/cleanup/stats:
+    get:
+      summary: Storage Cleanup Statistics
+      description: Returns directory sizes for temp uploads, thumbs, processed outputs, and available device disk space.
+      responses:
+        '200':
+          description: Storage breakdown
+
+  /api/cleanup/run:
+    post:
+      summary: Trigger Safe Storage Cleanup
+      description: Scans application temp directories, removes expired and unlinked temporary files, while protecting active jobs and user source files.
+      responses:
+        '200':
+          description: Cleanup summary
+
+  /api/cleanup/retention:
+    post:
+      summary: Configure Temporary File Retention
+      description: Updates the retention duration in minutes before temporary files become eligible for cleanup.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [minutes]
+              properties:
+                minutes:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200':
+          description: Retention updated
+
+  /api/upload:
+    post:
+      summary: Multipart File Upload (Supports 3 GB+)
+      description: Streams uploaded media directly to disk via Multer disk storage without RAM buffering.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: File uploaded successfully
+        '400':
+          description: No file attached
+        '507':
+          description: Insufficient server storage space
+
+  /api/download/{filename}:
+    get:
+      summary: Download Processed or Media File
+      description: Downloads a file by filename or explicit safe storage path with streaming piping.
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: File stream
+        '404':
+          description: File not found
+
+  /api/stream-file:
+    get:
+      summary: HTTP 206 Partial Content Streaming
+      description: Streams media file with byte range support for seamless browser video and audio playback.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Complete file stream
+        '206':
+          description: Partial content range stream
+        '404':
+          description: File not found
+
+  /api/browse:
+    get:
+      summary: Browse Device Storage Files & Folders
+      description: Lists media files and folders under allowed roots (/sdcard, /storage, Termux home). Prevents directory traversal.
+      parameters:
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Directory listing
+        '403':
+          description: Access denied outside allowed roots
+
+  /api/analyze-media:
+    get:
+      summary: Media Stream Analysis
+      description: Probes audio, video, and subtitle streams, format, bitrate, resolution, and duration using ffprobe.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Media stream metadata
+
+  /api/process-direct:
+    post:
+      summary: Submit FFmpeg Media Processing Job
+      description: Submits video conversion, compression, audio extraction, or trim operations to the background queue.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filePath]
+              properties:
+                filePath:
+                  type: string
+                operation:
+                  type: string
+                operations:
+                  type: object
+                options:
+                  type: object
+      responses:
+        '200':
+          description: Job accepted and queued
+        '400':
+          description: Missing or invalid parameters
+        '429':
+          description: Queue is full
+
+  /api/run-custom:
+    post:
+      summary: Execute Custom FFmpeg Arguments
+      description: Safely parses and enqueues custom FFmpeg arguments without shell execution.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                command:
+                  type: string
+                workingDir:
+                  type: string
+      responses:
+        '200':
+          description: Custom job enqueued
+        '400':
+          description: Disallowed or unsafe arguments
+
+  /api/cancel-job:
+    post:
+      summary: Cancel Running or Queued Job
+      description: Gracefully stops the active FFmpeg child process, removes partial output, unblocks queue, and updates status to cancelled.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                jobId:
+                  type: string
+      responses:
+        '200':
+          description: Job cancelled
+
+  /api/current-job:
+    get:
+      summary: Get Current Active Job State
+      description: Returns state, progress, ETA, and speed of the active job. Preserved across browser page refreshes.
+      responses:
+        '200':
+          description: Active job object
+
+  /api/jobs:
+    get:
+      summary: Job History
+      description: Retrieves persistent job history from SQLite.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: List of jobs
+    delete:
+      summary: Clear Job History
+      description: Clears job history records from SQLite for the active session.
+      responses:
+        '200':
+          description: History cleared
+
+  /api/jobs/{id}/logs:
+    get:
+      summary: Job Execution Logs
+      description: Returns captured stdout/stderr log lines for the specified job.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job log output
+        '404':
+          description: Job not found
+
+  /api/progress:
+    get:
+      summary: Server-Sent Events (SSE) Real-Time Progress Stream
+      description: Pushes real-time progress, speed, ETA, and job state transitions to the browser.
+      responses:
+        '200':
+          description: text/event-stream SSE connection
