@@ -4,7 +4,8 @@
   "description": "Production-ready web-based FFmpeg tool running natively on Termux localhost",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "nodemon"
   },
   "keywords": [
     "termux",
@@ -27,5 +28,8 @@
     "multer": "^2.5.0",
     "pdf-lib": "^1.17.1",
     "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
   }
 }

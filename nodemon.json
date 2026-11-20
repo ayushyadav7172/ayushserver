@@ -1,0 +1,23 @@
+{
+  "restartable": "rs",
+  "exec": "node server.js",
+  "watch": [
+    "server.js",
+    "pdf-routes.js",
+    "wake-lock.js",
+    "public"
+  ],
+  "ext": "js,mjs,cjs,json,html,css",
+  "ignore": [
+    "node_modules/**",
+    ".git/**",
+    "temp_uploads/**",
+    "processed/**",
+    "temp_pdf_uploads/**",
+    "pdf_outputs/**",
+    "temp_thumbs/**",
+    "downloads/**",
+    "*.log"
+  ],
+  "delay": 1000
+}
