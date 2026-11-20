@@ -326,10 +326,6 @@ app.get(['/dashboard', '/dashboard/', '/dashboard.html'], (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'dashboard.html'));
 });
 
-app.get(['/docs', '/docs/', '/docs.html'], (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'docs.html'));
-});
-
 app.get('/docs/openapi.yaml', (req, res) => {
   res.sendFile(path.join(__dirname, 'docs', 'openapi.yaml'));
 });
@@ -4891,7 +4887,6 @@ if (require.main === module) {
     console.log(`Bound to:          ${hostUsed}:${PORT}`);
     console.log(`Localhost:         http://localhost:${PORT}`);
     console.log(`Dashboard:         http://localhost:${PORT}/dashboard`);
-    console.log(`API Docs:          http://localhost:${PORT}/docs`);
     console.log(`Media Studio:      http://localhost:${PORT}/media`);
     console.log(`PDF & Docs Studio: http://localhost:${PORT}/pdf`);
     console.log(`Image Studio:      http://localhost:${PORT}/image`);

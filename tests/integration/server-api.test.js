@@ -59,16 +59,14 @@ describe('API Integration: Server, Health, Analytics, Queue & Storage', () => {
     assert.ok(html.includes('Termux Utility Studio'));
   });
 
-  test('GET /dashboard and GET /docs return 200 and serve HTML views', async () => {
+  test('GET /dashboard returns 200 and serves HTML view; /docs is removed', async () => {
     const dashRes = await fetch(`${baseUrl}/dashboard`, { headers: { 'Connection': 'close' } });
     assert.equal(dashRes.status, 200);
     const dashHtml = await dashRes.text();
     assert.ok(dashHtml.includes('Live Analytics Dashboard'));
 
     const docsRes = await fetch(`${baseUrl}/docs`, { headers: { 'Connection': 'close' } });
-    assert.equal(docsRes.status, 200);
-    const docsHtml = await docsRes.text();
-    assert.ok(docsHtml.includes('API Documentation'));
+    assert.equal(docsRes.status, 404, '/docs HTML webpage should be removed from Web UI');
   });
 
   test('GET /docs/openapi.yaml serves valid OpenAPI 3.1 specification', async () => {
