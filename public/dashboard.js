@@ -1,10 +1,25 @@
 'use strict';
 
 (function () {
-  let refreshTimer = null;
+  let countdownTimer = null;
+  let currentIntervalSec = 10;
+  let remainingSeconds = 10;
+  let isFetching = false;
 
-  // Theme toggle
+  // DOM Elements
   const themeToggle = document.getElementById('themeToggle');
+  const refreshIntervalSelect = document.getElementById('refreshInterval');
+  const refreshCountdownBadge = document.getElementById('refreshCountdownBadge');
+  const btnManualRefresh = document.getElementById('btnManualRefresh');
+  const iconRefresh = document.getElementById('iconRefresh');
+  const textRefresh = document.getElementById('textRefresh');
+  const btnSaveConcurrency = document.getElementById('btnSaveConcurrency');
+  const inputConcurrency = document.getElementById('inputConcurrency');
+  const btnTriggerCleanup = document.getElementById('btnTriggerCleanup');
+  const btnTriggerBackup = document.getElementById('btnTriggerBackup');
+  const btnClearErrors = document.getElementById('btnClearErrors');
+
+  // 1. Theme toggle
   if (themeToggle) {
     themeToggle.addEventListener('click', () => {
       const current = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -14,25 +29,127 @@
     });
   }
 
-  // Refresh interval select
-  const refreshIntervalSelect = document.getElementById('refreshInterval');
+  // 2. Countdown & Auto-Refresh Logic
+  function updateCountdownDisplay() {
+    if (!refreshCountdownBadge) return;
+    if (currentIntervalSec <= 0) {
+      refreshCountdownBadge.textContent = 'Paused';
+      refreshCountdownBadge.style.color = 'var(--dash-muted)';
+      refreshCountdownBadge.style.background = 'rgba(255,255,255,0.05)';
+    } else {
+      refreshCountdownBadge.textContent = `${remainingSeconds}s`;
+      refreshCountdownBadge.style.color = 'var(--dash-primary)';
+      refreshCountdownBadge.style.background = 'rgba(56,189,248,0.12)';
+    }
+  }
+
+  function startCountdownTimer() {
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
+
+    if (currentIntervalSec <= 0) {
+      updateCountdownDisplay();
+      return;
+    }
+
+    remainingSeconds = currentIntervalSec;
+    updateCountdownDisplay();
+
+    countdownTimer = setInterval(() => {
+      remainingSeconds--;
+      if (remainingSeconds <= 0) {
+        remainingSeconds = currentIntervalSec;
+        triggerRefresh(false);
+      }
+      updateCountdownDisplay();
+    }, 1000);
+  }
+
+  function setupAutoRefresh(intervalMs) {
+    const sec = Math.floor(intervalMs / 1000);
+    currentIntervalSec = sec;
+    remainingSeconds = sec;
+    startCountdownTimer();
+  }
+
+  // Auto-refresh interval change listener
   if (refreshIntervalSelect) {
+    // Restore saved preference if exists
+    const saved = localStorage.getItem('dashboard_refresh_interval');
+    if (saved !== null) {
+      refreshIntervalSelect.value = saved;
+      currentIntervalSec = Math.floor(parseInt(saved, 10) / 1000);
+    }
+
     refreshIntervalSelect.addEventListener('change', (e) => {
-      setupAutoRefresh(parseInt(e.target.value, 10));
+      const ms = parseInt(e.target.value, 10);
+      localStorage.setItem('dashboard_refresh_interval', String(ms));
+      setupAutoRefresh(ms);
     });
   }
 
-  // Manual refresh button
-  const btnManualRefresh = document.getElementById('btnManualRefresh');
+  // Manual refresh button listener
   if (btnManualRefresh) {
     btnManualRefresh.addEventListener('click', () => {
-      fetchDashboardStats();
+      remainingSeconds = currentIntervalSec;
+      updateCountdownDisplay();
+      triggerRefresh(true);
     });
   }
 
-  // Set concurrency button
-  const btnSaveConcurrency = document.getElementById('btnSaveConcurrency');
-  const inputConcurrency = document.getElementById('inputConcurrency');
+  // Re-sync on tab visibility change (e.g. mobile tab resume)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && currentIntervalSec > 0) {
+      remainingSeconds = currentIntervalSec;
+      updateCountdownDisplay();
+      triggerRefresh(false);
+    }
+  });
+
+  async function triggerRefresh(isManual = false) {
+    if (isFetching) return;
+    isFetching = true;
+
+    if (iconRefresh) iconRefresh.classList.add('spin');
+    if (textRefresh && isManual) textRefresh.textContent = 'Updating...';
+
+    await fetchDashboardStats();
+
+    if (iconRefresh) {
+      setTimeout(() => {
+        iconRefresh.classList.remove('spin');
+      }, 350);
+    }
+    if (textRefresh) textRefresh.textContent = 'Refresh';
+
+    isFetching = false;
+  }
+
+  // 3. Clear Warnings & Errors
+  if (btnClearErrors) {
+    btnClearErrors.addEventListener('click', async () => {
+      btnClearErrors.disabled = true;
+      btnClearErrors.textContent = 'Clearing...';
+      try {
+        const res = await fetch('/api/analytics/clear-errors', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          await fetchDashboardStats();
+        } else {
+          alert('Failed to clear warnings: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error clearing warnings: ' + err.message);
+      } finally {
+        btnClearErrors.disabled = false;
+        btnClearErrors.textContent = 'Clear Warnings';
+      }
+    });
+  }
+
+  // 4. Set concurrency button
   if (btnSaveConcurrency && inputConcurrency) {
     btnSaveConcurrency.addEventListener('click', async () => {
       const val = parseInt(inputConcurrency.value, 10);
@@ -48,7 +165,7 @@
         });
         const data = await res.json();
         if (data.success) {
-          fetchDashboardStats();
+          triggerRefresh(false);
         } else {
           alert('Failed to update concurrency: ' + (data.error || 'Unknown error'));
         }
@@ -58,8 +175,7 @@
     });
   }
 
-  // Run cleanup button
-  const btnTriggerCleanup = document.getElementById('btnTriggerCleanup');
+  // 5. Run cleanup button
   if (btnTriggerCleanup) {
     btnTriggerCleanup.addEventListener('click', async () => {
       btnTriggerCleanup.disabled = true;
@@ -68,7 +184,7 @@
         const res = await fetch('/api/cleanup/run', { method: 'POST' });
         const data = await res.json();
         alert(`Cleanup finished: ${data.totalDeleted || 0} files deleted.`);
-        fetchDashboardStats();
+        triggerRefresh(false);
       } catch (e) {
         alert('Cleanup error: ' + e.message);
       } finally {
@@ -78,8 +194,7 @@
     });
   }
 
-  // Trigger backup button
-  const btnTriggerBackup = document.getElementById('btnTriggerBackup');
+  // 6. Trigger backup button
   if (btnTriggerBackup) {
     btnTriggerBackup.addEventListener('click', async () => {
       btnTriggerBackup.disabled = true;
@@ -132,6 +247,8 @@
   }
 
   function renderDashboard(data) {
+    if (!data) return;
+
     // 1. Server status & uptime
     const serverBadge = document.getElementById('serverStatusBadge');
     const serverText = document.getElementById('serverStatusText');
@@ -259,28 +376,27 @@
       if (recentErrors.length === 0) {
         errorContainer.innerHTML = '<div style="color:var(--dash-muted); padding:16px 0; text-align:center;">No recent errors or warnings. Server is running smoothly.</div>';
       } else {
-        errorContainer.innerHTML = recentErrors.map(err => `
-          <div class="error-item">
-            <div><strong>${err.name || 'Job error'}</strong> (${err.operation || 'process'}):</div>
-            <div style="color:var(--dash-danger); margin-top:2px;">${err.error || 'Unknown error'}</div>
-            <div style="color:var(--dash-muted); font-size:11px; margin-top:2px;">${new Date(err.completedAt).toLocaleTimeString()}</div>
-          </div>
-        `).join('');
+        errorContainer.innerHTML = recentErrors.map(err => {
+          let timeDisplay = 'Earlier';
+          if (err.completedAt) {
+            try {
+              timeDisplay = new Date(err.completedAt).toLocaleTimeString();
+            } catch (e) {}
+          }
+          return `
+            <div class="error-item">
+              <div><strong>${err.name || 'Job issue'}</strong> (${err.operation || 'process'}):</div>
+              <div style="color:var(--dash-danger); margin-top:2px;">${err.error || 'Interrupted or failed'}</div>
+              <div style="color:var(--dash-muted); font-size:11px; margin-top:2px;">${timeDisplay}</div>
+            </div>
+          `;
+        }).join('');
       }
     }
   }
 
-  function setupAutoRefresh(intervalMs) {
-    if (refreshTimer) {
-      clearInterval(refreshTimer);
-      refreshTimer = null;
-    }
-    if (intervalMs > 0) {
-      refreshTimer = setInterval(fetchDashboardStats, intervalMs);
-    }
-  }
-
-  // Initial load
-  fetchDashboardStats();
-  setupAutoRefresh(10000);
+  // Initial load and start timer
+  const initialMs = refreshIntervalSelect ? parseInt(refreshIntervalSelect.value, 10) : 10000;
+  triggerRefresh(false);
+  setupAutoRefresh(initialMs);
 })();

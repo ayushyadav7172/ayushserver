@@ -420,13 +420,16 @@ class DatabaseManager {
       WHERE status = 'completed'
     `).get();
 
+    const clearedAt = parseInt(this.getSetting('errors_cleared_at') || '0', 10);
     const recentErrors = this.db.prepare(`
       SELECT id, name, operation, error, completed_at
       FROM jobs
-      WHERE status IN ('failed', 'interrupted') AND error IS NOT NULL
+      WHERE status IN ('failed', 'interrupted') 
+        AND error IS NOT NULL 
+        AND (completed_at IS NULL OR completed_at > ?)
       ORDER BY completed_at DESC
       LIMIT 10
-    `).all();
+    `).all(clearedAt);
 
     return {
       jobs: {
@@ -448,6 +451,18 @@ class DatabaseManager {
         completedAt: r.completed_at
       }))
     };
+  }
+
+  clearRecentErrors() {
+    if (!this.db) this.init();
+    const now = Date.now();
+    this.setSetting('errors_cleared_at', now);
+    this.db.prepare(`
+      UPDATE jobs
+      SET error = NULL
+      WHERE status IN ('failed', 'interrupted')
+    `).run();
+    return { success: true, clearedAt: now };
   }
 
   // ==================== BACKUPS API ====================

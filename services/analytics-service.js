@@ -103,6 +103,10 @@ class AnalyticsService {
   recordEvent(event) {
     this.db.recordAnalyticsEvent(event);
   }
+
+  clearErrors() {
+    return this.db.clearRecentErrors();
+  }
 }
 
 const defaultAnalyticsService = new AnalyticsService();

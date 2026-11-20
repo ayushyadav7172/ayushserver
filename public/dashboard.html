@@ -75,19 +75,22 @@
       </div>
 
       <div class="dashboard-controls">
-        <select id="refreshInterval" class="select-dash">
-          <option value="5000">Refresh: 5s</option>
-          <option value="10000" selected>Refresh: 10s</option>
-          <option value="30000">Refresh: 30s</option>
-          <option value="0">Auto-refresh Off</option>
-        </select>
-        <button id="btnManualRefresh" class="btn-dash" type="button">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <div style="display:inline-flex; align-items:center; gap:6px;">
+          <select id="refreshInterval" class="select-dash" title="Auto-refresh rate">
+            <option value="5000">Auto: 5s</option>
+            <option value="10000" selected>Auto: 10s</option>
+            <option value="30000">Auto: 30s</option>
+            <option value="0">Auto: Off</option>
+          </select>
+          <span id="refreshCountdownBadge" class="status-badge" style="background:rgba(56,189,248,0.12); color:var(--dash-primary); font-variant-numeric:tabular-nums; font-size:12px; min-width:44px; text-align:center;" title="Time until next auto-refresh">10s</span>
+        </div>
+        <button id="btnManualRefresh" class="btn-dash" type="button" title="Refresh now">
+          <svg id="iconRefresh" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="23 4 23 10 17 10"></polyline>
             <polyline points="1 20 1 14 7 14"></polyline>
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
           </svg>
-          Refresh
+          <span id="textRefresh">Refresh</span>
         </button>
         <button id="btnTriggerCleanup" class="btn-dash" type="button">Run Cleanup</button>
         <button id="btnTriggerBackup" class="btn-dash btn-dash-primary" type="button">Backup DB</button>
@@ -234,7 +237,10 @@
       <div class="panel-card">
         <div class="panel-header">
           <h2>System Warnings &amp; Errors</h2>
-          <span id="errorCountBadge" class="status-badge status-healthy">0 Warnings</span>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button id="btnClearErrors" class="btn-dash" style="font-size:12px; padding:4px 10px;" type="button" title="Dismiss all warnings and errors">Clear Warnings</button>
+            <span id="errorCountBadge" class="status-badge status-healthy">0 Warnings</span>
+          </div>
         </div>
         <div id="errorListContainer" class="error-list">
           <div style="color:var(--dash-muted); padding:16px 0; text-align:center;">No recent errors or warnings. Server is running smoothly.</div>

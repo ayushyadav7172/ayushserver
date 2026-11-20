@@ -97,7 +97,7 @@ describe('API Integration: Server, Health, Analytics, Queue & Storage', () => {
     assert.equal(ready.data.ready, true);
   });
 
-  test('GET /api/analytics/stats returns live aggregated dashboard metrics', async () => {
+  test('GET /api/analytics/stats and POST /api/analytics/clear-errors manages metrics and clears warnings', async () => {
     const { status, data } = await apiGet('/api/analytics/stats');
     assert.equal(status, 200);
     assert.ok(data.server);
@@ -105,6 +105,14 @@ describe('API Integration: Server, Health, Analytics, Queue & Storage', () => {
     assert.ok(data.ffmpeg);
     assert.ok(data.storage);
     assert.equal(typeof data.processing.totalJobs, 'number');
+
+    const clearRes = await apiPost('/api/analytics/clear-errors');
+    assert.equal(clearRes.status, 200);
+    assert.equal(clearRes.data.success, true);
+
+    const afterClear = await apiGet('/api/analytics/stats');
+    assert.equal(afterClear.status, 200);
+    assert.equal(afterClear.data.processing.recentErrors.length, 0);
   });
 
   test('GET and POST /api/queue/concurrency controls queue worker limits', async () => {

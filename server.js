@@ -4705,6 +4705,15 @@ app.get('/api/analytics/stats', (req, res) => {
   res.json(analyticsService.getDashboardStats());
 });
 
+app.post('/api/analytics/clear-errors', (req, res) => {
+  try {
+    const result = analyticsService.clearErrors();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ==================== APPLICATION BACKUPS API ====================
 app.get('/api/backup/list', (req, res) => {
   res.json({ backups: backupManager.getBackupsList() });

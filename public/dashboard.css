@@ -288,6 +288,15 @@ body {
   border-radius: 4px;
 }
 
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 0.6s linear infinite;
+}
+
 @media (max-width: 640px) {
   .section-grid {
     grid-template-columns: 1fr;
