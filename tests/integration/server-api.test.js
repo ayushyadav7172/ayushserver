@@ -6,7 +6,7 @@ const http = require('http');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { app } = require('../../server');
+const { app, cleanupManager, backupManager, queueManager } = require('../../server');
 
 describe('API Integration: Server, Health, Analytics, Queue & Storage', () => {
   let server;
@@ -26,6 +26,9 @@ describe('API Integration: Server, Health, Analytics, Queue & Storage', () => {
   });
 
   after(async () => {
+    if (cleanupManager && typeof cleanupManager.stopScheduler === 'function') cleanupManager.stopScheduler();
+    if (backupManager && typeof backupManager.stopScheduler === 'function') backupManager.stopScheduler();
+    if (queueManager && typeof queueManager.shutdown === 'function') queueManager.shutdown();
     if (server) {
       if (typeof server.closeAllConnections === 'function') {
         server.closeAllConnections();
@@ -160,7 +163,8 @@ describe('API Integration: Server, Health, Analytics, Queue & Storage', () => {
   });
 
   test('GET /api/browse lists safe phone directories and blocks traversal', async () => {
-    const browseRes = await apiGet('/api/browse?path=/data/data/com.termux/files/home');
+    const safeBrowsePath = process.env.HOME || __dirname;
+    const browseRes = await apiGet(`/api/browse?path=${encodeURIComponent(safeBrowsePath)}`);
     assert.equal(browseRes.status, 200);
     assert.ok(Array.isArray(browseRes.data.items) || Array.isArray(browseRes.data.files));
 

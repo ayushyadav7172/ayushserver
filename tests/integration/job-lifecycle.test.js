@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-const { app, databaseManager, jobManager, queueManager } = require('../../server');
+const { app, databaseManager, jobManager, queueManager, cleanupManager, backupManager } = require('../../server');
 
 describe('API Integration: Media Job Lifecycle, Queue & Recovery', () => {
   let server;
@@ -32,6 +32,9 @@ describe('API Integration: Media Job Lifecycle, Queue & Recovery', () => {
   });
 
   after(async () => {
+    if (cleanupManager && typeof cleanupManager.stopScheduler === 'function') cleanupManager.stopScheduler();
+    if (backupManager && typeof backupManager.stopScheduler === 'function') backupManager.stopScheduler();
+    if (queueManager && typeof queueManager.shutdown === 'function') queueManager.shutdown();
     if (fs.existsSync(sampleVideoPath)) {
       try { fs.unlinkSync(sampleVideoPath); } catch (e) {}
     }
