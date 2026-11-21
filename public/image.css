@@ -481,12 +481,17 @@
 }
 
 @media (max-width: 720px) {
+  html { font-size: 13.5px; }
+  .image-main { padding: 12px 10px 48px; }
   .image-picker-row {
     flex-direction: column;
+    gap: 8px;
   }
 
   .image-picker-row .btn {
     width: 100%;
+    padding: 7px 12px;
+    font-size: 0.82rem;
   }
 
   .segmented {
@@ -496,6 +501,8 @@
 
   .segmented-btn {
     flex: 1;
+    padding: 6px 8px;
+    font-size: 0.78rem;
   }
 
   .image-result-row {
@@ -508,13 +515,14 @@
 }
 
 @media (max-width: 580px) {
+  html { font-size: 12.5px; }
   .image-main {
-    padding-left: 14px;
-    padding-right: 14px;
+    padding-left: 10px;
+    padding-right: 10px;
   }
 
   .image-target-card .card-body {
-    padding: 14px;
+    padding: 10px;
   }
 
   .image-size-strip {

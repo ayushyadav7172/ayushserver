@@ -425,37 +425,50 @@
 }
 
 @media (max-width: 720px) {
+  html { font-size: 13.5px; }
+  .pdf-main { padding: 12px 10px 48px; }
   .pdf-picker-row {
     flex-direction: column;
+    gap: 8px;
   }
 
   .pdf-picker-row .btn {
     width: 100%;
+    padding: 7px 12px;
+    font-size: 0.82rem;
   }
 
   .pdf-action-row {
     align-items: stretch;
     flex-direction: column;
+    gap: 8px;
   }
 
   .pdf-action-row .btn {
     width: 100%;
+    padding: 7px 12px;
+    font-size: 0.82rem;
   }
 
   .pdf-options-grid {
     grid-template-columns: 1fr;
+    gap: 8px;
   }
 }
 
 @media (max-width: 580px) {
+  html { font-size: 12.5px; }
   .topbar-actions a[href="/media"] {
     display: none;
   }
 
   .pdf-main {
-    padding-left: 14px;
-    padding-right: 14px;
+    padding-left: 10px;
+    padding-right: 10px;
   }
+
+  .card-head { padding: 9px 12px; }
+  .card-body { padding: 10px 10px; }
 
   .rotate-options {
     grid-template-columns: 1fr;

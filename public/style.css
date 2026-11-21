@@ -947,9 +947,21 @@ details[open] > .collapsible-head .collapsible-arrow { transform: rotate(180deg)
 
 /* ------------------------------ RESPONSIVE ------------------------------- */
 @media (max-width: 820px) {
+  html { font-size: 13.5px; }
+  :root {
+    --topbar-h: 50px;
+  }
+  body {
+    font-size: 13.5px;
+  }
   .brand-text small { display: none; }
   .sys-status { display: none; }
   .nav-toggle { display: inline-grid; }
+  .topbar {
+    height: 50px;
+    padding: 0 12px;
+    gap: 8px;
+  }
   .stepper {
     position: absolute;
     top: 100%;
@@ -959,7 +971,7 @@ details[open] > .collapsible-head .collapsible-arrow { transform: rotate(180deg)
     flex-direction: column;
     align-items: stretch;
     gap: 4px;
-    padding: 12px;
+    padding: 10px 12px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     box-shadow: var(--shadow-lg);
@@ -967,21 +979,42 @@ details[open] > .collapsible-head .collapsible-arrow { transform: rotate(180deg)
   }
   .stepper.open { display: flex; }
   .step-line { display: none; }
-  .nav-item { justify-content: flex-start; border-radius: var(--r-sm); }
+  .nav-item { justify-content: flex-start; border-radius: var(--r-sm); padding: 7px 10px; font-size: 0.84rem; }
   .nav-item-utility { margin-left: 0; }
 
-  .panel-header { flex-direction: column; }
-  .target-badge { max-width: 100%; width: 100%; }
-  .grid-2 { grid-template-columns: 1fr; }
-  .field-row { flex-direction: column; }
-  .big-percent { font-size: 2rem; }
-  .main-content { padding: 20px 14px 56px; }
+  .panel-header { flex-direction: column; gap: 8px; margin-bottom: 14px; }
+  .panel-header h1 { font-size: 1.25rem; }
+  .subtitle { font-size: 0.8rem; }
+  .target-badge { max-width: 100%; width: 100%; padding: 6px 10px; }
+  .target-badge strong { font-size: 0.78rem; }
+  .grid-2 { gap: 8px; }
+  .card { border-radius: 8px; margin-bottom: 12px; }
+  .card-head { padding: 10px 12px; gap: 10px; }
+  .card-head h2, .card-head h3 { font-size: 0.95rem; }
+  .card-body { padding: 12px; }
+  .form-group { margin-bottom: 10px; }
+  .label { font-size: 0.78rem; margin-bottom: 4px; }
+  .input { padding: 7px 10px; font-size: 0.82rem; border-radius: 6px; }
+  .btn { padding: 7px 14px; font-size: 0.82rem; border-radius: 6px; }
+  .chips { gap: 6px; margin-top: 8px; }
+  .chip { padding: 4px 8px; font-size: 0.74rem; }
+  .big-percent { font-size: 1.7rem; }
+  .main-content { padding: 14px 10px 50px; }
 }
 
 @media (max-width: 480px) {
-  .history-card { flex-direction: column; align-items: flex-start; }
-  .toast-container { left: 12px; right: 12px; }
-  .toast { max-width: none; }
+  html { font-size: 12.5px; }
+  body { font-size: 12.5px; }
+  .main-content { padding: 10px 8px 44px; }
+  .panel-header h1 { font-size: 1.15rem; }
+  .card-head { padding: 8px 10px; }
+  .card-body { padding: 10px 8px; }
+  .btn { padding: 6px 10px; font-size: 0.8rem; }
+  .input { padding: 6px 8px; font-size: 0.8rem; }
+  .grid-2 { grid-template-columns: 1fr; }
+  .history-card { flex-direction: column; align-items: flex-start; padding: 10px; }
+  .toast-container { left: 8px; right: 8px; }
+  .toast { max-width: none; font-size: 0.8rem; padding: 8px 10px; }
 }
 
 /* ==========================================================================
