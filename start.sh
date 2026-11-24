@@ -40,8 +40,14 @@ if ! command -v gs >/dev/null 2>&1; then
     echo "[!] Ghostscript not found. PDF compression will use qpdf only. Optional: pkg install ghostscript"
 fi
 
-# Find local IP address for easy mobile or LAN access
-LOCAL_IP=$(ip -4 addr show wlan0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "")
+# Find local IP address for easy mobile, hotspot (ap0), cellular (ccmni/rmnet), or LAN access
+LOCAL_IP=$(ip -4 addr show wlan0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || true)
+if [ -z "$LOCAL_IP" ]; then
+    LOCAL_IP=$(ip -4 addr show ap0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || true)
+fi
+if [ -z "$LOCAL_IP" ]; then
+    LOCAL_IP=$(ip -4 addr show 2>/dev/null | grep -v '127.0.0.1' | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1 || echo "")
+fi
 
 echo ""
 echo "[✓] Environment ready."

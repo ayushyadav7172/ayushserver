@@ -203,6 +203,9 @@ class QueueManager extends EventEmitter {
           try { ffmpegProc.kill('SIGKILL'); } catch (e) {}
         }
       }, JOB_INACTIVITY_TIMEOUT_MS);
+      if (jobContext.watchdog && typeof jobContext.watchdog.unref === 'function') {
+        jobContext.watchdog.unref();
+      }
     };
 
     try {
@@ -463,8 +466,14 @@ class QueueManager extends EventEmitter {
 
   _cleanupJobAfterSettled(jobId) {
     const ctx = this.activeJobs.get(jobId);
-    if (ctx && ctx.wakeLock) {
-      try { ctx.wakeLock.release(); } catch (e) {}
+    if (ctx) {
+      if (ctx.watchdog) {
+        clearTimeout(ctx.watchdog);
+        ctx.watchdog = null;
+      }
+      if (ctx.wakeLock) {
+        try { ctx.wakeLock.release(); } catch (e) {}
+      }
     }
     this.activeJobs.delete(jobId);
     // Process next queued job
@@ -576,6 +585,13 @@ class QueueManager extends EventEmitter {
 
     for (const [id, ctx] of this.activeJobs.entries()) {
       try {
+        if (ctx.watchdog) {
+          clearTimeout(ctx.watchdog);
+          ctx.watchdog = null;
+        }
+        if (ctx.wakeLock) {
+          try { ctx.wakeLock.release(); } catch (e) {}
+        }
         if (ctx.process && !ctx.process.killed) {
           console.log(`[QueueManager] Terminating active job ${id} (PID ${ctx.process.pid})`);
           ctx.process.kill('SIGTERM');

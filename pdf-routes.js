@@ -895,14 +895,26 @@ function createPdfRouter(deps) {
     );
     const outputPath = uniqueOutputPath(outputDir, `${baseStem(sourceName)}_unlocked`, '.pdf');
     const password = body.password === undefined || body.password === null ? '' : String(body.password);
+    let tempPwdFile = null;
 
     try {
       if (concurrencyLock && concurrencyLock.pdfJob) concurrencyLock.pdfJob.activeFiles.add(path.resolve(sourcePath));
-      await runCommand('qpdf', [`--password=${password}`, '--decrypt', sourcePath, outputPath], 'Password removal', 180000, req);
+      const qpdfArgs = ['--decrypt', sourcePath, outputPath];
+      if (password) {
+        tempPwdFile = path.join(outputDir, `.pwd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.tmp`);
+        fs.writeFileSync(tempPwdFile, password + '\n', { mode: 0o600 });
+        qpdfArgs.unshift(`--password-file=${tempPwdFile}`);
+      } else {
+        qpdfArgs.unshift('--password=');
+      }
+      await runCommand('qpdf', qpdfArgs, 'Password removal', 180000, req);
     } catch (err) {
       removeFileQuietly(outputPath);
       throw err;
     } finally {
+      if (tempPwdFile && fs.existsSync(tempPwdFile)) {
+        try { fs.unlinkSync(tempPwdFile); } catch (e) {}
+      }
       if (concurrencyLock && concurrencyLock.pdfJob && concurrencyLock.pdfJob.activeFiles) {
         concurrencyLock.pdfJob.activeFiles.delete(path.resolve(sourcePath));
       }

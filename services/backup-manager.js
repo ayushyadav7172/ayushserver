@@ -109,7 +109,8 @@ class BackupManager {
         throw new Error('Database is not initialized');
       }
 
-      rawDb.exec(`VACUUM INTO '${targetPath}';`);
+      const safeTargetPath = String(targetPath).replace(/'/g, "''");
+      rawDb.exec(`VACUUM INTO '${safeTargetPath}';`);
 
       const stat = fs.statSync(targetPath);
       const checksum = await this.computeChecksum(targetPath);
@@ -208,7 +209,8 @@ class BackupManager {
     // 3. Create pre-restore safety snapshot of active database
     const safetySnapshotPath = path.join(this.backupsDir, `pre-restore-safety-${Date.now()}.db`);
     try {
-      this.db.db.exec(`VACUUM INTO '${safetySnapshotPath}';`);
+      const safeSnapshotPath = String(safetySnapshotPath).replace(/'/g, "''");
+      this.db.db.exec(`VACUUM INTO '${safeSnapshotPath}';`);
     } catch (e) {
       console.warn('[BackupManager] Could not create pre-restore snapshot:', e.message);
     }

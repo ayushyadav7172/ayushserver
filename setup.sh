@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/data/data/com.termux/files/usr/bin/bash
 echo "🚀 Setting up Termux Studio..."
 chmod +x start.sh
 CURRENT_DIR=$(pwd)

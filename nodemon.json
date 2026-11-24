@@ -5,12 +5,16 @@
     "server.js",
     "pdf-routes.js",
     "wake-lock.js",
+    "services",
+    "database",
     "public"
   ],
   "ext": "js,mjs,cjs,json,html,css",
   "ignore": [
     "node_modules/**",
     ".git/**",
+    "database/*.db*",
+    "backups/**",
     "temp_uploads/**",
     "processed/**",
     "temp_pdf_uploads/**",

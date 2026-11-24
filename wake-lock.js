@@ -18,6 +18,8 @@ class WakeLockManager {
     this.nextTaskId = 1;
     this.isSystemLockHeld = false;
     this._queue = Promise.resolve();
+    this._unlockTimer = null;
+    this.isDestroyed = false;
     this._setupProcessCleanup();
   }
 
@@ -86,10 +88,31 @@ class WakeLockManager {
 
   /**
    * Synchronize the system wake-lock state with the current number of active tasks.
-   * Serialized sequentially through a Promise chain to avoid out-of-order execution.
+   * Serialized sequentially through a Promise chain with debounced release to avoid rapid cycling.
    */
   _syncSystemState() {
     const shouldBeLocked = this.activeTasks.size > 0;
+    if (shouldBeLocked) {
+      if (this._unlockTimer) {
+        clearTimeout(this._unlockTimer);
+        this._unlockTimer = null;
+      }
+      this._applySystemState(true);
+    } else {
+      if (this._unlockTimer) {
+        clearTimeout(this._unlockTimer);
+      }
+      this._unlockTimer = setTimeout(() => {
+        this._unlockTimer = null;
+        this._applySystemState(false);
+      }, 300);
+      if (this._unlockTimer && typeof this._unlockTimer.unref === 'function') {
+        this._unlockTimer.unref();
+      }
+    }
+  }
+
+  _applySystemState(shouldBeLocked) {
     if (shouldBeLocked === this.isSystemLockHeld) {
       return;
     }
@@ -99,6 +122,7 @@ class WakeLockManager {
 
     this._queue = this._queue
       .then(() => {
+        if (this.isDestroyed) return;
         return new Promise((resolve) => {
           exec(cmd, (err) => {
             if (err) {
@@ -122,6 +146,12 @@ class WakeLockManager {
    */
   forceReleaseSync() {
     try {
+      if (this._unlockTimer) {
+        clearTimeout(this._unlockTimer);
+        this._unlockTimer = null;
+      }
+      this.isDestroyed = true;
+      this._queue = Promise.resolve();
       if (this.activeTasks.size > 0 || this.isSystemLockHeld) {
         this.activeTasks.clear();
         this.isSystemLockHeld = false;

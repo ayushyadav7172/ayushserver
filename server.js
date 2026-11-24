@@ -607,7 +607,7 @@ const concurrencyLock = {
 
 // Reset activeJob to idle after a delay (keeps data visible for result screen, then clears)
 function scheduleActiveJobReset(delayMs = 60000) {
-  setTimeout(() => {
+  const timer = setTimeout(() => {
     // Only reset if the job is no longer processing (don't reset a new running job)
     if (activeJob.status !== 'processing') {
       activeJob.status = 'idle';
@@ -615,6 +615,9 @@ function scheduleActiveJobReset(delayMs = 60000) {
       activeJob.outputPath = '';
     }
   }, delayMs);
+  if (timer && typeof timer.unref === 'function') {
+    timer.unref();
+  }
 }
 
 // ==================== AUTO-CLEANUP & STORAGE LIFECYCLE (30 MIN) ====================
@@ -1987,12 +1990,15 @@ function notifyJobSubscribers(jobId, payload) {
   // Gracefully close job-specific SSE subscribers when the job finishes
   if (jobId && sseSubscribers.has(jobId) && payload.type === 'status' && ['completed', 'failed', 'cancelled'].includes(payload.status)) {
     const jobSubs = Array.from(sseSubscribers.get(jobId));
-    setTimeout(() => {
+    const sseCloseTimer = setTimeout(() => {
       for (const client of jobSubs) {
         try { client.end(); } catch (e) {}
       }
       sseSubscribers.delete(jobId);
     }, 500);
+    if (sseCloseTimer && sseCloseTimer.unref) {
+      sseCloseTimer.unref();
+    }
   }
 }
 
@@ -4464,6 +4470,9 @@ app.get(['/api/progress/:jobId', '/api/progress'], (req, res) => {
           activeJob.error = 'Job cancelled: remote browser disconnected for over 5 minutes.';
         }
       }, 5 * 60 * 1000);
+      if (zombieInactivityTimer && zombieInactivityTimer.unref) {
+        zombieInactivityTimer.unref();
+      }
     }
   });
 });
