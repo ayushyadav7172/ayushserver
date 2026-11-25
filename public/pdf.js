@@ -83,10 +83,10 @@
   function getOrCreateSessionId() {
     let sid = null;
     try {
-      sid = localStorage.getItem('ffstudio_session_id');
+      sid = sessionStorage.getItem('ffstudio_session_id');
       if (!sid) {
         sid = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
-        localStorage.setItem('ffstudio_session_id', sid);
+        sessionStorage.setItem('ffstudio_session_id', sid);
       }
     } catch (e) {
       sid = 'sess_' + Date.now();
@@ -163,7 +163,7 @@
       this.label = label;
       if (this.storageKey) {
         try {
-          localStorage.setItem(this.storageKey, JSON.stringify({
+          sessionStorage.setItem(this.storageKey, JSON.stringify({
             expiresAt: this.expiresAt,
             label: this.label
           }));
@@ -180,14 +180,14 @@
       this.element.className = 'countdown-timer-box is-expired';
       this.element.innerHTML = '⚠️ <span>File expired (auto-deleted)</span>';
       if (this.storageKey) {
-        try { localStorage.removeItem(this.storageKey); } catch (e) {}
+        try { sessionStorage.removeItem(this.storageKey); } catch (e) {}
       }
     }
 
     recover() {
       if (!this.storageKey) return false;
       try {
-        const raw = localStorage.getItem(this.storageKey);
+        const raw = sessionStorage.getItem(this.storageKey);
         if (!raw) return false;
         const data = JSON.parse(raw);
         if (data && data.expiresAt) {
@@ -240,7 +240,7 @@
         this.element.textContent = '';
       }
       if (this.storageKey) {
-        try { localStorage.removeItem(this.storageKey); } catch (e) {}
+        try { sessionStorage.removeItem(this.storageKey); } catch (e) {}
       }
     }
   }
@@ -294,7 +294,7 @@
     try {
       const expiresAt = data.expiresAt || (Date.now() + 30 * 60 * 1000);
       data.expiresAt = expiresAt;
-      localStorage.setItem('ffstudio_pdf_last_result', JSON.stringify({
+      sessionStorage.setItem('ffstudio_pdf_last_result', JSON.stringify({
         panelId,
         data,
         expiresAt
@@ -304,7 +304,7 @@
 
   function recoverPdfLastResult() {
     try {
-      const raw = localStorage.getItem('ffstudio_pdf_last_result');
+      const raw = sessionStorage.getItem('ffstudio_pdf_last_result');
       if (!raw) return;
       const item = JSON.parse(raw);
       if (item && item.expiresAt > Date.now() && item.panelId && item.data) {
@@ -314,7 +314,7 @@
           renderResult(container, item.data);
         }
       } else {
-        localStorage.removeItem('ffstudio_pdf_last_result');
+        sessionStorage.removeItem('ffstudio_pdf_last_result');
       }
     } catch (e) {}
   }
@@ -450,15 +450,15 @@
     $('btnClearPdfSession')?.addEventListener('click', () => {
       if (confirm('Reset your remote PDF session? This will clear active selections and stored result sessions.')) {
         try {
-          localStorage.removeItem('ffstudio_pdf_last_result');
-          localStorage.removeItem('ffstudio_pdf_timer_unlock');
-          localStorage.removeItem('ffstudio_pdf_timer_merge');
-          localStorage.removeItem('ffstudio_pdf_timer_compress');
-          localStorage.removeItem('ffstudio_pdf_timer_split');
-          localStorage.removeItem('ffstudio_pdf_timer_rotate');
-          localStorage.removeItem('ffstudio_pdf_timer_images');
-          localStorage.removeItem('ffstudio_pdf_timer_toimages');
-          localStorage.removeItem('ffstudio_session_id');
+          sessionStorage.removeItem('ffstudio_pdf_last_result');
+          sessionStorage.removeItem('ffstudio_pdf_timer_unlock');
+          sessionStorage.removeItem('ffstudio_pdf_timer_merge');
+          sessionStorage.removeItem('ffstudio_pdf_timer_compress');
+          sessionStorage.removeItem('ffstudio_pdf_timer_split');
+          sessionStorage.removeItem('ffstudio_pdf_timer_rotate');
+          sessionStorage.removeItem('ffstudio_pdf_timer_images');
+          sessionStorage.removeItem('ffstudio_pdf_timer_toimages');
+          sessionStorage.removeItem('ffstudio_session_id');
         } catch (e) {}
         Object.values(pdfTimers).forEach((t) => t.clear());
         const inputIds = ['unlockPath', 'mergePathInput', 'compressPath', 'splitPath', 'rotatePath', 'imagePathInput', 'toImagesPath'];
@@ -1266,10 +1266,64 @@
         clearInterval(pdfQueuePollTimer);
         pdfQueuePollTimer = null;
       }
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       setBusy(button, false);
       showToast('Queue wait cancelled.', 'warning');
       renderError(result, 'Queue wait cancelled by user.');
     };
+
+    const executeTask = async () => {
+      if (cancelled) return;
+      if (pdfQueuePollTimer) {
+        clearInterval(pdfQueuePollTimer);
+        pdfQueuePollTimer = null;
+      }
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      showToast('Aapka number aa gaya! Starting PDF operation...', 'success');
+      setBusy(button, true, busyLabel);
+
+      try {
+        await executeFn();
+      } catch (execErr) {
+        if (execErr.busy) {
+          startPdfAutoQueue(result, button, busyLabel, execErr.data || {}, executeFn);
+          return;
+        }
+        renderError(result, execErr.message);
+        showToast(execErr.message, 'error');
+      } finally {
+        setBusy(button, false);
+      }
+    };
+
+    const checkQueueNow = async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch('/api/queue/status');
+        if (!res.ok) return;
+        const qStatus = await res.json();
+        if (cancelled) return;
+
+        if (qStatus.isIdle) {
+          await executeTask();
+        } else {
+          const titleEl = $('pdfQueueTitle');
+          const descEl = $('pdfQueueDesc');
+          const pos = (qStatus.queuedCount || 0) + (qStatus.locks?.media ? 1 : 0);
+          if (titleEl) titleEl.textContent = `Aapki file Queue me hai (Aage ${pos || 1} file baaki hai)`;
+          if (descEl && qStatus.activeJobInfo) descEl.textContent = `Server abhi ${qStatus.activeJobInfo} process kar raha hai. Jaise hi complete hoga, automatically start hoga!`;
+        }
+      } catch (pollErr) {
+        console.warn('[PDF Queue Poll] error:', pollErr.message);
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (!document.hidden && !cancelled) {
+        checkQueueNow();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     renderPdfQueueResult(result, {
       queuePosition: busyData.queuePosition || 1,
@@ -1284,42 +1338,7 @@
 
       if (secondsLeft <= 0) {
         secondsLeft = 3;
-        try {
-          const res = await fetch('/api/queue/status');
-          if (!res.ok) return;
-          const qStatus = await res.json();
-          if (cancelled) return;
-
-          if (qStatus.isIdle) {
-            if (pdfQueuePollTimer) {
-              clearInterval(pdfQueuePollTimer);
-              pdfQueuePollTimer = null;
-            }
-            showToast('Aapka number aa gaya! Starting PDF operation...', 'success');
-            setBusy(button, true, busyLabel);
-
-            try {
-              await executeFn();
-            } catch (execErr) {
-              if (execErr.busy) {
-                startPdfAutoQueue(result, button, busyLabel, execErr.data || {}, executeFn);
-                return;
-              }
-              renderError(result, execErr.message);
-              showToast(execErr.message, 'error');
-            } finally {
-              setBusy(button, false);
-            }
-          } else {
-            const titleEl = $('pdfQueueTitle');
-            const descEl = $('pdfQueueDesc');
-            const pos = (qStatus.queuedCount || 0) + (qStatus.locks?.media ? 1 : 0);
-            if (titleEl) titleEl.textContent = `Aapki file Queue me hai (Aage ${pos || 1} file baaki hai)`;
-            if (descEl && qStatus.activeJobInfo) descEl.textContent = `Server abhi ${qStatus.activeJobInfo} process kar raha hai. Jaise hi complete hoga, automatically start hoga!`;
-          }
-        } catch (pollErr) {
-          console.warn('[PDF Queue Poll] error:', pollErr.message);
-        }
+        await checkQueueNow();
       }
     }, 1000);
   }

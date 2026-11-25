@@ -149,7 +149,7 @@ class AutoCleanupTimer {
     this.label = label;
     if (this.storageKey) {
       try {
-        localStorage.setItem(this.storageKey, JSON.stringify({
+        sessionStorage.setItem(this.storageKey, JSON.stringify({
           expiresAt: this.expiresAt,
           label: this.label
         }));
@@ -166,14 +166,17 @@ class AutoCleanupTimer {
     this.element.className = 'countdown-timer-box is-expired';
     this.element.innerHTML = '⚠️ <span>File expired (auto-deleted)</span>';
     if (this.storageKey) {
-      try { localStorage.removeItem(this.storageKey); } catch (e) {}
+      try {
+        sessionStorage.removeItem(this.storageKey);
+        localStorage.removeItem(this.storageKey);
+      } catch (e) {}
     }
   }
 
   recover() {
     if (!this.storageKey) return false;
     try {
-      const raw = localStorage.getItem(this.storageKey);
+      const raw = sessionStorage.getItem(this.storageKey) || localStorage.getItem(this.storageKey);
       if (!raw) return false;
       const data = JSON.parse(raw);
       if (data && data.expiresAt) {
@@ -226,7 +229,10 @@ class AutoCleanupTimer {
       this.element.textContent = '';
     }
     if (this.storageKey) {
-      try { localStorage.removeItem(this.storageKey); } catch (e) {}
+      try {
+        sessionStorage.removeItem(this.storageKey);
+        localStorage.removeItem(this.storageKey);
+      } catch (e) {}
     }
   }
 }
@@ -234,10 +240,10 @@ class AutoCleanupTimer {
 function getOrCreateSessionId() {
   let sid = null;
   try {
-    sid = localStorage.getItem('ffstudio_session_id');
+    sid = sessionStorage.getItem('ffstudio_session_id');
     if (!sid) {
       sid = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
-      localStorage.setItem('ffstudio_session_id', sid);
+      sessionStorage.setItem('ffstudio_session_id', sid);
     }
   } catch (e) {
     sid = 'sess_' + Date.now();
@@ -464,6 +470,7 @@ function setupStorageModeAndUpload() {
         mediaOutputTimer.innerHTML = '';
       }
       try {
+        sessionStorage.removeItem('ffstudio_media_output_timer');
         localStorage.removeItem('ffstudio_media_output_timer');
       } catch (e) {}
     }
@@ -500,6 +507,7 @@ function setupStorageModeAndUpload() {
         mediaOutputCountdownTimer = null;
         clearSelectedMedia();
         try {
+          sessionStorage.removeItem('ffstudio_session_id');
           localStorage.removeItem('ffstudio_session_id');
         } catch (e) {}
         showToast('Session reset. A fresh session ID has been generated.', 'info');
@@ -1300,8 +1308,12 @@ function renderExplorerItems(items) {
 // ======================== PERSISTENT STATE & STORAGE HELPERS ========================
 function clearSelectedMedia() {
   selectedMedia = null;
-  localStorage.removeItem('selectedFilePath');
-  localStorage.removeItem('selectedFileMetadata');
+  try {
+    sessionStorage.removeItem('selectedFilePath');
+    sessionStorage.removeItem('selectedFileMetadata');
+    localStorage.removeItem('selectedFilePath');
+    localStorage.removeItem('selectedFileMetadata');
+  } catch (e) {}
 
   if (selectedMediaCard) selectedMediaCard.style.display = 'none';
   if (selectedMediaName) selectedMediaName.textContent = '';
@@ -1460,8 +1472,12 @@ function populateSelectedMediaUI(data) {
 }
 
 function restoreSelectedMediaState() {
-  const savedPath = localStorage.getItem('selectedFilePath');
-  const savedMetadataStr = localStorage.getItem('selectedFileMetadata');
+  let savedPath = null;
+  let savedMetadataStr = null;
+  try {
+    savedPath = sessionStorage.getItem('selectedFilePath') || localStorage.getItem('selectedFilePath');
+    savedMetadataStr = sessionStorage.getItem('selectedFileMetadata') || localStorage.getItem('selectedFileMetadata');
+  } catch (e) {}
 
   if (!savedPath || !savedMetadataStr) {
     if (selectedMediaCard) selectedMediaCard.style.display = 'none';
@@ -1475,10 +1491,10 @@ function restoreSelectedMediaState() {
   try {
     const metadata = JSON.parse(savedMetadataStr);
     if (!metadata || (!metadata.filePath && !metadata.path)) {
-      throw new Error('Invalid metadata in localStorage');
+      throw new Error('Invalid metadata in storage');
     }
 
-    console.log('[State Restore] Restoring selected media from localStorage (instant, no extra probe):', savedPath);
+    console.log('[State Restore] Restoring selected media from storage (instant, no extra probe):', savedPath);
     // Populate UI immediately from cached metadata (instant UI)
     populateSelectedMediaUI(metadata);
 
@@ -1492,7 +1508,9 @@ function restoreSelectedMediaState() {
           const freshData = await readApiPayload(res);
           if (freshData && freshData.success) {
             freshData.path = freshData.filePath;
-            localStorage.setItem('selectedFileMetadata', JSON.stringify(freshData));
+            try {
+              sessionStorage.setItem('selectedFileMetadata', JSON.stringify(freshData));
+            } catch (e) {}
           }
         }
       })
@@ -1500,9 +1518,13 @@ function restoreSelectedMediaState() {
         console.warn('[State Restore] Background check error:', err.message);
       });
   } catch (err) {
-    console.warn('[State Restore] Failed to restore media state from localStorage:', err.message);
-    localStorage.removeItem('selectedFilePath');
-    localStorage.removeItem('selectedFileMetadata');
+    console.warn('[State Restore] Failed to restore media state from storage:', err.message);
+    try {
+      sessionStorage.removeItem('selectedFilePath');
+      sessionStorage.removeItem('selectedFileMetadata');
+      localStorage.removeItem('selectedFilePath');
+      localStorage.removeItem('selectedFileMetadata');
+    } catch (e) {}
   }
 }
 
@@ -1529,12 +1551,12 @@ async function selectMediaFile(filePath) {
     selectedMedia.name = data.filename || data.name || selectedMedia.path.split('/').pop();
     selectedMedia.directory = data.directory || selectedMedia.path.substring(0, selectedMedia.path.lastIndexOf('/')) || '/sdcard';
 
-    // 1. Save state to localStorage as required
+    // 1. Save state to sessionStorage (tab-isolated)
     try {
-      localStorage.setItem('selectedFilePath', selectedMedia.filePath);
-      localStorage.setItem('selectedFileMetadata', JSON.stringify(selectedMedia));
+      sessionStorage.setItem('selectedFilePath', selectedMedia.filePath);
+      sessionStorage.setItem('selectedFileMetadata', JSON.stringify(selectedMedia));
     } catch (storageErr) {
-      console.warn('[State Persist] Could not save selected file to localStorage:', storageErr.message);
+      console.warn('[State Persist] Could not save selected file to sessionStorage:', storageErr.message);
     }
 
     // 2. Populate UI
@@ -2902,6 +2924,7 @@ function handleJobCompleted(data) {
         mediaOutputTimer.innerHTML = '';
       }
       try {
+        sessionStorage.removeItem('ffstudio_media_output_timer');
         localStorage.removeItem('ffstudio_media_output_timer');
       } catch (e) {}
     }
@@ -3133,3 +3156,12 @@ function escapeHtml(str) {
   if (str === null || str === undefined) return '';
   return String(str).replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+// Immediate wake-up on tab refocus (prevents background throttling on mobile devices)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && isConversionRunning) {
+    if (typeof pollCurrentJob === 'function') {
+      pollCurrentJob();
+    }
+  }
+});

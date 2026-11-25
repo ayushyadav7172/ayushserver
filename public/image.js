@@ -97,10 +97,10 @@
   function getOrCreateSessionId() {
     let sid = null;
     try {
-      sid = localStorage.getItem('ffstudio_session_id');
+      sid = sessionStorage.getItem('ffstudio_session_id');
       if (!sid) {
         sid = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
-        localStorage.setItem('ffstudio_session_id', sid);
+        sessionStorage.setItem('ffstudio_session_id', sid);
       }
     } catch (e) {
       sid = 'sess_' + Date.now();
@@ -803,7 +803,7 @@
         const expiresAt = data.expiresAt || (Date.now() + 30 * 60 * 1000);
         data.expiresAt = expiresAt;
         try {
-          localStorage.setItem('ffstudio_image_last_result', JSON.stringify({
+          sessionStorage.setItem('ffstudio_image_last_result', JSON.stringify({
             data,
             expiresAt
           }));
@@ -816,8 +816,8 @@
         outTimer.start(expiresAt, 'Output file(s) will be deleted in');
       } else {
         try {
-          localStorage.removeItem('ffstudio_image_output_timer');
-          localStorage.removeItem('ffstudio_image_last_result');
+          sessionStorage.removeItem('ffstudio_image_output_timer');
+          sessionStorage.removeItem('ffstudio_image_last_result');
         } catch (e) {}
         const localNotice = document.createElement('div');
         localNotice.className = 'banner banner-success';
@@ -1025,12 +1025,83 @@
         clearInterval(imageQueuePollTimer);
         imageQueuePollTimer = null;
       }
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       state.inQueue = false;
       state.busy = false;
       setBusy(button, false);
       showToast('Queue wait cancelled.', 'warning');
       renderErrorResult('Queue wait cancelled by user.');
     };
+
+    const executeTask = async () => {
+      if (cancelled || !state.inQueue) return;
+      if (imageQueuePollTimer) {
+        clearInterval(imageQueuePollTimer);
+        imageQueuePollTimer = null;
+      }
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      state.inQueue = false;
+      showToast('Aapka number aa gaya! Starting image processing...', 'success');
+      setBusy(button, true, busyLabel);
+      renderRunningResult(payload.inputPaths.length);
+
+      try {
+        const data = await postJson('/api/image/process', payload);
+        const results = Array.isArray(data.results) ? data.results : [];
+        const failures = results.filter((item) => !item.success);
+        if (data.summary && Number.isFinite(Number(data.summary.totalOutputSize))) {
+          state.actualTotal = Number(data.summary.totalOutputSize);
+        }
+        renderResults(data);
+        syncSizeStrip();
+        if (failures.length === 0) {
+          showToast(data.message || 'Images processed.', 'success');
+        } else {
+          showToast(data.message || 'Finished with errors.', data.processed > 0 ? 'warning' : 'error');
+        }
+      } catch (execErr) {
+        if (execErr.busy) {
+          startImageAutoQueue(payload, button, busyLabel, execErr.data || {});
+          return;
+        }
+        renderErrorResult(execErr.message);
+        showToast(execErr.message, 'error');
+      } finally {
+        if (!state.inQueue) {
+          setBusy(button, false);
+          state.busy = false;
+        }
+      }
+    };
+
+    const checkQueueNow = async () => {
+      if (cancelled || !state.inQueue) return;
+      try {
+        const res = await fetch('/api/queue/status');
+        if (!res.ok) return;
+        const qStatus = await res.json();
+        if (cancelled || !state.inQueue) return;
+
+        if (qStatus.isIdle) {
+          await executeTask();
+        } else {
+          const titleEl = $('imageQueueTitle');
+          const descEl = $('imageQueueDesc');
+          const pos = (qStatus.queuedCount || 0) + (qStatus.locks?.media ? 1 : 0);
+          if (titleEl) titleEl.textContent = `Aapki file Queue me hai (Aage ${pos || 1} file baaki hai)`;
+          if (descEl && qStatus.activeJobInfo) descEl.textContent = `Server abhi ${qStatus.activeJobInfo} process kar raha hai. Jaise hi complete hoga, automatically start hoga!`;
+        }
+      } catch (pollErr) {
+        console.warn('[Queue Poll] error:', pollErr.message);
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (!document.hidden && state.inQueue) {
+        checkQueueNow();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     renderQueueResult({
       queuePosition: busyData.queuePosition || 1,
@@ -1045,59 +1116,7 @@
 
       if (secondsLeft <= 0) {
         secondsLeft = 3;
-        try {
-          const res = await fetch('/api/queue/status');
-          if (!res.ok) return;
-          const qStatus = await res.json();
-          if (cancelled) return;
-
-          if (qStatus.isIdle) {
-            if (imageQueuePollTimer) {
-              clearInterval(imageQueuePollTimer);
-              imageQueuePollTimer = null;
-            }
-            state.inQueue = false;
-            showToast('Aapka number aa gaya! Starting image processing...', 'success');
-            setBusy(button, true, busyLabel);
-            renderRunningResult(payload.inputPaths.length);
-
-            try {
-              const data = await postJson('/api/image/process', payload);
-              const results = Array.isArray(data.results) ? data.results : [];
-              const failures = results.filter((item) => !item.success);
-              if (data.summary && Number.isFinite(Number(data.summary.totalOutputSize))) {
-                state.actualTotal = Number(data.summary.totalOutputSize);
-              }
-              renderResults(data);
-              syncSizeStrip();
-              if (failures.length === 0) {
-                showToast(data.message || 'Images processed.', 'success');
-              } else {
-                showToast(data.message || 'Finished with errors.', data.processed > 0 ? 'warning' : 'error');
-              }
-            } catch (execErr) {
-              if (execErr.busy) {
-                startImageAutoQueue(payload, button, busyLabel, execErr.data || {});
-                return;
-              }
-              renderErrorResult(execErr.message);
-              showToast(execErr.message, 'error');
-            } finally {
-              if (!state.inQueue) {
-                setBusy(button, false);
-                state.busy = false;
-              }
-            }
-          } else {
-            const titleEl = $('imageQueueTitle');
-            const descEl = $('imageQueueDesc');
-            const pos = (qStatus.queuedCount || 0) + (qStatus.locks?.media ? 1 : 0);
-            if (titleEl) titleEl.textContent = `Aapki file Queue me hai (Aage ${pos || 1} file baaki hai)`;
-            if (descEl && qStatus.activeJobInfo) descEl.textContent = `Server abhi ${qStatus.activeJobInfo} process kar raha hai. Jaise hi complete hoga, automatically start hoga!`;
-          }
-        } catch (pollErr) {
-          console.warn('[Queue Poll] error:', pollErr.message);
-        }
+        await checkQueueNow();
       }
     }, 1000);
   }
@@ -1561,7 +1580,7 @@
       this.label = label;
       if (this.storageKey) {
         try {
-          localStorage.setItem(this.storageKey, JSON.stringify({
+          sessionStorage.setItem(this.storageKey, JSON.stringify({
             expiresAt: this.expiresAt,
             label: this.label
           }));
@@ -1574,7 +1593,7 @@
     recover() {
       if (!this.storageKey) return false;
       try {
-        const raw = localStorage.getItem(this.storageKey);
+        const raw = sessionStorage.getItem(this.storageKey);
         if (!raw) return false;
         const data = JSON.parse(raw);
         if (data && data.expiresAt) {
@@ -1608,7 +1627,7 @@
       if (remaining <= 0) {
         this.showExpired();
         if (this.storageKey) {
-          try { localStorage.removeItem(this.storageKey); } catch (e) {}
+          try { sessionStorage.removeItem(this.storageKey); } catch (e) {}
         }
         if (typeof this.onExpire === 'function') this.onExpire();
         return;
@@ -1636,7 +1655,7 @@
         this.element.textContent = '';
       }
       if (this.storageKey) {
-        try { localStorage.removeItem(this.storageKey); } catch (e) {}
+        try { sessionStorage.removeItem(this.storageKey); } catch (e) {}
       }
     }
   }
@@ -1707,10 +1726,10 @@
       }
       if (confirm('Reset your remote image session? This clears cached results and active selections.')) {
         try {
-          localStorage.removeItem('ffstudio_image_last_result');
-          localStorage.removeItem('ffstudio_image_upload_timer');
-          localStorage.removeItem('ffstudio_image_output_timer');
-          localStorage.removeItem('ffstudio_session_id');
+          sessionStorage.removeItem('ffstudio_image_last_result');
+          sessionStorage.removeItem('ffstudio_image_upload_timer');
+          sessionStorage.removeItem('ffstudio_image_output_timer');
+          sessionStorage.removeItem('ffstudio_session_id');
         } catch (e) {}
         state.paths = [];
         state.info.clear();
@@ -1851,7 +1870,7 @@
   function recoverImageLastResult() {
     try {
       if (!isImageRemoteMode()) return;
-      const raw = localStorage.getItem('ffstudio_image_last_result');
+      const raw = sessionStorage.getItem('ffstudio_image_last_result');
       if (!raw) return;
       const item = JSON.parse(raw);
       if (item && item.expiresAt > Date.now() && item.data) {
