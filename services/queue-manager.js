@@ -53,6 +53,24 @@ class QueueManager extends EventEmitter {
     return this;
   }
 
+  attachProcess(jobId, proc) {
+    const ctx = this.activeJobs.get(jobId);
+    if (ctx) {
+      ctx.process = proc;
+    }
+    if (ctx && ctx.job) {
+      ctx.job._process = proc;
+    }
+  }
+
+  detachProcess(jobId) {
+    const ctx = this.activeJobs.get(jobId);
+    if (ctx) {
+      ctx.process = null;
+      if (ctx.job) ctx.job._process = null;
+    }
+  }
+
   getConcurrency() {
     return this.maxConcurrency;
   }
@@ -124,6 +142,10 @@ class QueueManager extends EventEmitter {
       };
       this.activeJobs.set(job.id, jobContext);
       this.executor(job).then((res) => {
+        if (jobContext.settled || job.status === 'cancelled') {
+          this._cleanupJobAfterSettled(job.id);
+          return;
+        }
         jobContext.settled = true;
         const finalStatus = (res && res.status) ? res.status : 'completed';
         const completedAt = (res && res.completedAt) ? res.completedAt : Date.now();
@@ -146,6 +168,10 @@ class QueueManager extends EventEmitter {
         });
         this._cleanupJobAfterSettled(job.id);
       }).catch((err) => {
+        if (jobContext.settled || job.status === 'cancelled') {
+          this._cleanupJobAfterSettled(job.id);
+          return;
+        }
         jobContext.settled = true;
         const completedAt = Date.now();
         const durationMs = completedAt - (job.startedAt || completedAt);
@@ -486,7 +512,7 @@ class QueueManager extends EventEmitter {
       return { success: false, message: 'Job not found' };
     }
 
-    if (sessionId && job.sessionId && job.sessionId !== sessionId) {
+    if (job.sessionId && job.sessionId !== sessionId) {
       const err = new Error('Unauthorized: You cannot cancel a job belonging to another session.');
       err.status = 403;
       throw err;
@@ -511,20 +537,34 @@ class QueueManager extends EventEmitter {
     // 2. If actively processing
     const context = this.activeJobs.get(job.id);
     if (context) {
+      context.settled = true;
       job.status = 'cancelled';
       job.completedAt = Date.now();
       job.error = 'Conversion cancelled by user';
 
-      if (context.process) {
+      const proc = context.process || job._process;
+      let cleanedUp = false;
+      const cleanupOnce = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        this._cleanupJobAfterSettled(job.id);
+      };
+
+      if (proc) {
         try {
-          const pid = context.process.pid;
+          const pid = proc.pid;
           console.log(`[QueueManager] Killing active FFmpeg process (PID ${pid}) for job ${job.id}`);
-          context.process.kill('SIGTERM');
-          setTimeout(() => {
-            if (context.process && !context.process.killed) {
-              try { context.process.kill('SIGKILL'); } catch (e) {}
+          proc.once('close', cleanupOnce);
+          proc.kill('SIGTERM');
+          const killTimer = setTimeout(() => {
+            if (proc && !proc.killed) {
+              try { proc.kill('SIGKILL'); } catch (e) {}
             }
+            cleanupOnce();
           }, 500);
+          if (killTimer && typeof killTimer.unref === 'function') {
+            killTimer.unref();
+          }
 
           if (pid) {
             try {
@@ -533,7 +573,10 @@ class QueueManager extends EventEmitter {
           }
         } catch (e) {
           console.warn('[QueueManager] Error terminating process:', e.message);
+          cleanupOnce();
         }
+      } else {
+        cleanupOnce();
       }
 
       // Clean up partial output file
@@ -548,7 +591,6 @@ class QueueManager extends EventEmitter {
       });
 
       this.emit('job:cancelled', { jobId: job.id, job });
-      this._cleanupJobAfterSettled(job.id);
       return { success: true, message: 'Active job cancelled successfully', job };
     }
 
@@ -592,9 +634,10 @@ class QueueManager extends EventEmitter {
         if (ctx.wakeLock) {
           try { ctx.wakeLock.release(); } catch (e) {}
         }
-        if (ctx.process && !ctx.process.killed) {
-          console.log(`[QueueManager] Terminating active job ${id} (PID ${ctx.process.pid})`);
-          ctx.process.kill('SIGTERM');
+        const proc = ctx.process || (ctx.job && ctx.job._process);
+        if (proc && !proc.killed) {
+          console.log(`[QueueManager] Terminating active job ${id} (PID ${proc.pid})`);
+          proc.kill('SIGTERM');
         }
       } catch (e) {}
     }

@@ -100,6 +100,15 @@ class AnalyticsService {
     };
   }
 
+  async getDashboardStatsAsync() {
+    const now = Date.now();
+    if (!this._cachedStorageStats || (now - this._storageCacheTime > 15000)) {
+      this._cachedStorageStats = await this.cleanup.getStorageStatsAsync();
+      this._storageCacheTime = now;
+    }
+    return this.getDashboardStats();
+  }
+
   recordEvent(event) {
     this.db.recordAnalyticsEvent(event);
   }

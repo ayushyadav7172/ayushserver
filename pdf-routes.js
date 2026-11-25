@@ -116,9 +116,11 @@ function createPdfRouter(deps) {
   function pdfConcurrencyMiddleware(toolName) {
     return (req, res, next) => {
       let directWakeLock = null;
+      req._pdfLockAcquired = false;
       if (concurrencyLock) {
         try {
           concurrencyLock.acquirePdfLock(toolName);
+          req._pdfLockAcquired = true;
         } catch (err) {
           return next(err);
         }
@@ -129,7 +131,8 @@ function createPdfRouter(deps) {
       const release = () => {
         if (!released) {
           released = true;
-          if (concurrencyLock) {
+          if (concurrencyLock && req._pdfLockAcquired) {
+            req._pdfLockAcquired = false;
             concurrencyLock.releasePdfLock();
           }
           if (directWakeLock) {
@@ -588,10 +591,17 @@ function createPdfRouter(deps) {
     return source.kind === 'direct' ? path.basename(source.path) : source.name;
   }
 
+  function isPathWithin(candidate, root) {
+    if (!candidate || !root) return false;
+    const c = path.resolve(String(candidate));
+    const r = path.resolve(String(root));
+    return c === r || c.startsWith(r + path.sep);
+  }
+
   function directFallbackDir(sources, isRemote = false) {
     if (isRemote) return EFFECTIVE_OUTPUT_DIR;
     const direct = sources.find((source) => source.kind === 'direct');
-    if (direct && TEMP_UPLOADS_DIR && direct.path.startsWith(TEMP_UPLOADS_DIR)) {
+    if (direct && TEMP_UPLOADS_DIR && isPathWithin(direct.path, TEMP_UPLOADS_DIR)) {
       return EFFECTIVE_OUTPUT_DIR;
     }
     return direct ? path.dirname(direct.path) : EFFECTIVE_OUTPUT_DIR;
@@ -766,17 +776,21 @@ function createPdfRouter(deps) {
         throw createHttpError(400, `Page ${Math.max(start, end)} is out of range. This PDF has ${pageCount} page${pageCount === 1 ? '' : 's'}.`);
       }
 
+      const tokenPageCount = Math.abs(end - start) + 1;
+      if (tokenPageCount > MAX_SPLIT_PAGES) {
+        throw createHttpError(413, `The range selects more than ${MAX_SPLIT_PAGES} pages. Choose a smaller range.`);
+      }
+
       const step = start <= end ? 1 : -1;
       for (let page = start; step > 0 ? page <= end : page >= end; page += step) {
         const index = page - 1;
         if (!seen.has(index)) {
           seen.add(index);
           indices.push(index);
+          if (indices.length > MAX_SPLIT_PAGES) {
+            throw createHttpError(413, `The range selects more than ${MAX_SPLIT_PAGES} pages. Choose a smaller range.`);
+          }
         }
-      }
-
-      if (indices.length > MAX_SPLIT_PAGES) {
-        throw createHttpError(413, `The range selects more than ${MAX_SPLIT_PAGES} pages. Choose a smaller range.`);
       }
     }
 
@@ -887,7 +901,7 @@ function createPdfRouter(deps) {
       sourceName = uploadFile.name;
     }
 
-    const isRemote = Boolean(body.isRemoteUpload || (directPath && TEMP_UPLOADS_DIR && directPath.startsWith(TEMP_UPLOADS_DIR)));
+    const isRemote = Boolean(body.isRemoteUpload || (directPath && TEMP_UPLOADS_DIR && isPathWithin(directPath, TEMP_UPLOADS_DIR)));
     const fallbackDir = (isRemote || !directPath) ? EFFECTIVE_OUTPUT_DIR : path.dirname(sourcePath);
     const outputDir = ensureOutputDir(
       getBodyValue(body, 'outputDir'),
@@ -1041,7 +1055,7 @@ function createPdfRouter(deps) {
       throw createHttpError(503, 'PDF compression needs qpdf or Ghostscript. Run: pkg install qpdf ghostscript');
     }
 
-    const isRemote = Boolean(body.isRemoteUpload || (source.isDirect && TEMP_UPLOADS_DIR && source.path.startsWith(TEMP_UPLOADS_DIR)));
+    const isRemote = Boolean(body.isRemoteUpload || (source.isDirect && TEMP_UPLOADS_DIR && isPathWithin(source.path, TEMP_UPLOADS_DIR)));
     const fallbackDir = (isRemote || !source.isDirect) ? EFFECTIVE_OUTPUT_DIR : path.dirname(source.path);
     const outputDir = ensureOutputDir(
       getBodyValue(body, 'outputDir'),
@@ -1198,7 +1212,7 @@ function createPdfRouter(deps) {
     const source = await resolveSinglePdfSource(req, body);
     assertPdfLibFileSize(source.path, source.name);
 
-    const isRemote = Boolean(body.isRemoteUpload || (source.isDirect && TEMP_UPLOADS_DIR && source.path.startsWith(TEMP_UPLOADS_DIR)));
+    const isRemote = Boolean(body.isRemoteUpload || (source.isDirect && TEMP_UPLOADS_DIR && isPathWithin(source.path, TEMP_UPLOADS_DIR)));
     const fallbackDir = (isRemote || !source.isDirect) ? EFFECTIVE_OUTPUT_DIR : path.dirname(source.path);
     const outputDir = ensureOutputDir(
       getBodyValue(body, 'outputDir'),
@@ -1266,7 +1280,7 @@ function createPdfRouter(deps) {
       throw createHttpError(400, 'Rotation must be 90, 180, or 270 degrees.');
     }
 
-    const isRemote = Boolean(body.isRemoteUpload || (source.isDirect && TEMP_UPLOADS_DIR && source.path.startsWith(TEMP_UPLOADS_DIR)));
+    const isRemote = Boolean(body.isRemoteUpload || (source.isDirect && TEMP_UPLOADS_DIR && isPathWithin(source.path, TEMP_UPLOADS_DIR)));
     const fallbackDir = (isRemote || !source.isDirect) ? EFFECTIVE_OUTPUT_DIR : path.dirname(source.path);
     const outputDir = ensureOutputDir(
       getBodyValue(body, 'outputDir'),
@@ -1428,13 +1442,14 @@ function createPdfRouter(deps) {
       throw createHttpError(400, 'First page cannot be greater than last page.');
     }
 
-    const isRemote = Boolean(body.isRemoteUpload || (directPath && TEMP_UPLOADS_DIR && directPath.startsWith(TEMP_UPLOADS_DIR)));
+    const isRemote = Boolean(body.isRemoteUpload || (directPath && TEMP_UPLOADS_DIR && isPathWithin(directPath, TEMP_UPLOADS_DIR)));
     const fallbackDir = (isRemote || !directPath) ? EFFECTIVE_OUTPUT_DIR : path.dirname(sourcePath);
     const parentDir = ensureOutputDir(getBodyValue(body, 'outputDir'), fallbackDir);
     const outputDir = uniqueOutputDir(parentDir, baseStem(sourceName));
     const prefix = path.join(outputDir, 'page');
 
-    const formatFlag = (body.format && String(body.format).toLowerCase() === 'png') ? '-png' : '-jpeg';
+    const isPng = Boolean(body.format && String(body.format).toLowerCase() === 'png');
+    const formatFlag = isPng ? '-png' : '-jpeg';
     const args = [formatFlag, '-r', String(dpi)];
     if (firstPage) args.push('-f', String(firstPage));
     if (lastPage) args.push('-l', String(lastPage));
@@ -1536,7 +1551,8 @@ function createPdfRouter(deps) {
     res.json({
       success: true,
       tool: 'pdf-to-images',
-      message: `Converted ${files.length} page${files.length === 1 ? '' : 's'} to JPG.`,
+      format: isPng ? 'png' : 'jpg',
+      message: `Converted ${files.length} page${files.length === 1 ? '' : 's'} to ${isPng ? 'PNG' : 'JPG'}.`,
       outputDir,
       outputPath: outputDir,
       fileCount: files.length,
@@ -1545,7 +1561,8 @@ function createPdfRouter(deps) {
   }));
 
   router.use((err, req, res, next) => {
-    if (concurrencyLock && typeof concurrencyLock.releasePdfLock === 'function') {
+    if (req._pdfLockAcquired && concurrencyLock && typeof concurrencyLock.releasePdfLock === 'function') {
+      req._pdfLockAcquired = false;
       try { concurrencyLock.releasePdfLock(); } catch (e) {}
     }
     cleanupUploads(req);

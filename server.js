@@ -222,12 +222,19 @@ function isOriginAllowed(origin) {
 
     // 2. Any valid IPv4 address (LAN, Wi-Fi, Hotspot ap0, Cellular ccmni/rmnet, CGNAT 100.x, Tailscale)
     if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) {
-      return true;
+      const octets = host.split('.').map(Number);
+      if (octets.every(n => n >= 0 && n <= 255)) {
+        return true;
+      }
+      return false;
     }
 
-    // 3. Any valid IPv6 address (Cellular ccmni IPv6, SLAAC, link-local fe80::)
-    if (/^\[?[0-9a-fA-F:]+\]?$/.test(host)) {
-      return true;
+    // 3. Any valid IPv6 address (must contain at least two colons to exclude plain hex hostnames)
+    const bareHost = host.replace(/^\[|\]$/g, '');
+    if (bareHost.includes('::') || bareHost.split(':').length >= 3) {
+      if (/^[0-9a-fA-F:]+$/.test(bareHost)) {
+        return true;
+      }
     }
 
     // 4. Local network domains and mDNS
@@ -235,8 +242,14 @@ function isOriginAllowed(origin) {
       return true;
     }
 
-    // 5. Authorized tunnels (Cloudflare tunnels, Localtunnel, Ngrok)
-    if (/(^|\.)(trycloudflare\.com|loca\.lt|ngrok(-free)?\.(io|app))$/i.test(host)) {
+    // 5. Authorized tunnels (restrictible via ALLOWED_TUNNEL_HOSTS env var)
+    const allowedTunnelsEnv = process.env.ALLOWED_TUNNEL_HOSTS;
+    if (allowedTunnelsEnv) {
+      const tunnelHosts = allowedTunnelsEnv.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      if (tunnelHosts.some(allowed => host === allowed || host.endsWith(`.${allowed}`))) {
+        return true;
+      }
+    } else if (/(^|\.)(trycloudflare\.com|loca\.lt|ngrok(-free)?\.(io|app))$/i.test(host)) {
       return true;
     }
 
@@ -299,7 +312,7 @@ app.use((req, res, next) => {
 // Middleware
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: Infinity, extended: true }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use(express.static(PUBLIC_DIR, { index: false }));
 
 app.get('/', (req, res) => {
@@ -400,9 +413,52 @@ const jobs = new Map();
 const sseSubscribers = new Map();
 const globalSseClients = new Set();
 
-// Active FFmpeg Process Instance
+// Active FFmpeg Process Tracking (supports maxConcurrency > 1 without clobbering)
 let currentFFmpegProcess = null;
+const activeProcesses = new Map(); // jobId -> ChildProcess
 let zombieInactivityTimer = null;
+
+function setProcessActive(jobId, proc) {
+  if (jobId && proc) {
+    activeProcesses.set(jobId, proc);
+  }
+  currentFFmpegProcess = proc;
+}
+
+function clearProcessActive(jobId) {
+  if (jobId) {
+    activeProcesses.delete(jobId);
+  }
+  if (activeProcesses.size > 0) {
+    const remaining = Array.from(activeProcesses.values());
+    currentFFmpegProcess = remaining[remaining.length - 1];
+  } else {
+    currentFFmpegProcess = null;
+  }
+}
+
+function syncActiveJobFromJob(job) {
+  if (!job) return;
+  const totalSec = job.totalDurationSec || job.expectedDuration || 0;
+  activeJob = {
+    jobId: job.id,
+    sessionId: job.sessionId || null,
+    status: job.status || 'processing',
+    filePath: job.filePath || (Array.isArray(job.inputPaths) ? job.inputPaths[0] : '') || '',
+    filename: job.filename || (job.filePath ? path.basename(job.filePath) : ''),
+    operation: job.operation || '',
+    progress: typeof job.progress === 'number' ? job.progress : (job.progress?.percent || 0),
+    isRemoteUpload: Boolean(job.isRemoteUpload),
+    currentTime: job.currentTime || '00:00:00',
+    totalDuration: job.totalDuration || formatTime(totalSec),
+    totalDurationSec: totalSec,
+    speed: job.speed || '0.0x',
+    outputPath: job.outputPath || '',
+    commandString: job.commandString || '',
+    error: job.error || null,
+    outputFile: job.outputFile || null
+  };
+}
 
 // A job is considered dead if FFmpeg produces no stdout/stderr for this long.
 // FFmpeg emits progress lines roughly twice a second, so total silence means
@@ -490,7 +546,11 @@ const concurrencyLock = {
     } catch (e) {}
   },
   isMediaProcessing() {
-    return Boolean(activeJob && activeJob.status === 'processing');
+    return Boolean(
+      (queueManager && queueManager.activeJobs && queueManager.activeJobs.size > 0) ||
+      activeProcesses.size > 0 ||
+      (activeJob && activeJob.status === 'processing')
+    );
   },
   acquireMediaLock() {
     if (this.pdfJob.isProcessing) {
@@ -606,10 +666,10 @@ const concurrencyLock = {
 };
 
 // Reset activeJob to idle after a delay (keeps data visible for result screen, then clears)
-function scheduleActiveJobReset(delayMs = 60000) {
+function scheduleActiveJobReset(expectedJobId = null, delayMs = 60000) {
   const timer = setTimeout(() => {
-    // Only reset if the job is no longer processing (don't reset a new running job)
-    if (activeJob.status !== 'processing') {
+    // Only reset if the job is no longer processing and still refers to the same job
+    if (activeJob.status !== 'processing' && (!expectedJobId || activeJob.jobId === expectedJobId)) {
       activeJob.status = 'idle';
       activeJob.filePath = '';
       activeJob.outputPath = '';
@@ -628,16 +688,8 @@ function isFileBeingWritten(filePath, initialStats) {
   try {
     const s1 = initialStats || fs.statSync(filePath);
     if (s1.isDirectory()) return false;
-    // If modified within the last 15 seconds, it is actively being written
+    // If modified within the last 15 seconds, treat as actively being written without blocking the event loop
     if (Date.now() - (s1.mtimeMs || 0) < 15000) {
-      return true;
-    }
-    // Check if file size or mtime changes over a tiny 50ms window
-    const size1 = s1.size;
-    const mtime1 = s1.mtimeMs;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
-    const s2 = fs.statSync(filePath);
-    if (s2.size !== size1 || s2.mtimeMs !== mtime1) {
       return true;
     }
     return false;
@@ -670,11 +722,17 @@ function isFileInActiveProcessing(filePath) {
     }
   }
 
-  // 2. Check all jobs in store (Media Studio jobs)
-  for (const job of jobs.values()) {
+  // 2. Check all jobs in store and active queue workers (Media Studio jobs)
+  const trackedJobs = new Map(jobs);
+  if (queueManager && queueManager.activeJobs) {
+    for (const [id, ctx] of queueManager.activeJobs.entries()) {
+      if (ctx && ctx.job) trackedJobs.set(id, ctx.job);
+    }
+  }
+  for (const job of trackedJobs.values()) {
     if (job && job.status === 'processing') {
       const jobAge = now - (job.startedAt || job.createdAt || now);
-      if (jobAge > MAX_JOB_AGE_MS) {
+      if (jobAge > MAX_JOB_AGE_MS && !activeProcesses.has(job.id)) {
         job.status = 'failed';
         job.error = 'Job timed out in processing state';
         continue;
@@ -768,7 +826,9 @@ function cleanDirectory(dirPath, isTempUploads = false) {
             console.log(`[Auto-Cleanup] Deleted expired file (${Math.round(ageMs / 60000)}m old): ${entry}`);
           }
         } catch (delErr) {
-          console.error('[Cleanup Failed]', fullPath, delErr);
+          if (delErr && delErr.code !== 'ENOENT') {
+            console.error('[Cleanup Failed]', fullPath, delErr);
+          }
         }
       }
     }
@@ -791,14 +851,8 @@ function runAutoCleanup() {
   }
 }
 
-// Rule E: Server Restart - cleanup script runs once on server startup
-runAutoCleanup();
-
-// Background setInterval every 2 minutes
-const autoCleanupTimer = setInterval(runAutoCleanup, 2 * 60 * 1000);
-if (autoCleanupTimer && autoCleanupTimer.unref) {
-  autoCleanupTimer.unref();
-}
+// Note: Cleanup scheduling is owned solely by cleanupManager (initialized in initServices)
+// to prevent duplicate sweeps racing on the same directories.
 
 // ======================== MULTER CONFIGURATION ========================
 // Strict filename sanitizer: strips null bytes, path traversal, control chars, limits length
@@ -1633,8 +1687,9 @@ function buildDynamicFfmpegArgs({ inputPath, operations = {}, audioTracks = [], 
   if (!isAudioOnly && isResizeEnabled) {
     const rawW = parseInt(resize.width, 10);
     const rawH = parseInt(resize.height, 10);
-    const w = rawW ? (rawW % 2 === 0 ? rawW : rawW - 1) : null;
-    const h = rawH ? (rawH % 2 === 0 ? rawH : rawH - 1) : null;
+    const toEven = (v) => (v > 0 ? Math.max(2, v % 2 === 0 ? v : v - 1) : null);
+    const w = toEven(rawW);
+    const h = toEven(rawH);
     if (w && h) {
       videoFilters.push(`scale=${w}:${h}`);
     } else if (w) {
@@ -1875,13 +1930,16 @@ function buildFfmpegArgs(operation, options, inputPaths, outputPath, primaryDura
     case 'rotate': {
       args.push('-i', primaryInput);
       const action = options.action || 'cw90';
-      let vf = '';
-      if (action === 'cw90') vf = 'transpose=1';
-      else if (action === 'ccw90') vf = 'transpose=2';
-      else if (action === '180') vf = 'vflip,hflip';
-      else if (action === 'hflip') vf = 'hflip';
-      else if (action === 'vflip') vf = 'vflip';
-      else vf = 'transpose=1';
+      const ROTATE_FILTERS = {
+        cw90: 'transpose=1',
+        '90_cw': 'transpose=1',
+        ccw90: 'transpose=2',
+        '90_ccw': 'transpose=2',
+        '180': 'vflip,hflip',
+        hflip: 'hflip',
+        vflip: 'vflip'
+      };
+      const vf = ROTATE_FILTERS[action] || 'transpose=1';
 
       args.push('-vf', vf, '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy', '-movflags', '+faststart');
       break;
@@ -1922,16 +1980,22 @@ function buildFfmpegArgs(operation, options, inputPaths, outputPath, primaryDura
 
     case 'raw': {
       const rawCmd = (options.rawCommand || '').trim();
-      const rawTokens = tokenizeArgs(rawCmd);
+      const rawTokens = parseCommandLine(rawCmd);
+      const rawExecArgs = [];
       for (const tok of rawTokens) {
         if (tok === '{INPUT}' || tok === '$INPUT') {
-          args.push(primaryInput);
+          rawExecArgs.push(primaryInput);
         } else if (tok === '{OUTPUT}' || tok === '$OUTPUT') {
           // Output is appended at end
         } else {
-          args.push(tok.replace('{INPUT}', primaryInput));
+          rawExecArgs.push(tok.split('{INPUT}').join(primaryInput));
         }
       }
+      const cwd = primaryInput ? path.dirname(primaryInput) : process.cwd();
+      validateCustomArgv(rawExecArgs, cwd);
+      const detectedOut = detectOutputPathFromArgv(rawExecArgs, cwd);
+      if (detectedOut) assertPathAllowed(detectedOut, 'Output file');
+      args.push(...rawExecArgs);
       break;
     }
 
@@ -2063,18 +2127,37 @@ function executeJob(job, isRetry = false) {
   });
 }
 
+function appendJobLogSafe(job, text) {
+  if (!job || !text) return;
+  try {
+    if (job.id && jobManager.getJob(job.id)) {
+      jobManager.appendLog(job.id, text);
+      return;
+    }
+  } catch (e) {}
+  if (!Array.isArray(job.logs)) job.logs = [];
+  job.logs.push(text);
+  if (job.logs.length > 300) job.logs.shift();
+}
+
 function _executeJobInternal(job) {
   return new Promise((resolve, reject) => {
     job.status = 'processing';
     job.startedAt = Date.now();
     job._settled = false;
     job.timedOut = false;
+
+    const isPrimaryActiveJob = () => !activeJob.jobId || activeJob.jobId === job.id || activeProcesses.size <= 1;
+    if (!activeJob.jobId || activeJob.status !== 'processing' || activeJob.jobId === job.id) {
+      syncActiveJobFromJob(job);
+    }
+
     notifyJobSubscribers(job.id, {
       type: 'status',
       status: 'processing',
       jobId: job.id,
       progress: (job.progress && typeof job.progress.percent === 'number') ? job.progress.percent : 0,
-      activeJob
+      activeJob: activeJob.jobId === job.id ? activeJob : formatJobForClient(job)
     });
 
     let ffmpegProc;
@@ -2124,10 +2207,13 @@ function _executeJobInternal(job) {
       job.status = 'failed';
       job.error = spawnErr.message;
       job.completedAt = Date.now();
-      activeJob.status = 'failed';
-      activeJob.error = spawnErr.message;
-      activeJob.filePath = '';
-      activeJob.outputPath = '';
+      if (activeJob.jobId === job.id || isPrimaryActiveJob()) {
+        activeJob.status = 'failed';
+        activeJob.error = spawnErr.message;
+        activeJob.filePath = '';
+        activeJob.outputPath = '';
+        scheduleActiveJobReset(job.id);
+      }
       if (concurrencyLock && concurrencyLock.removeFile) {
         concurrencyLock.removeFile(job.filePath);
         concurrencyLock.removeFile(job.outputPath);
@@ -2138,13 +2224,15 @@ function _executeJobInternal(job) {
         status: 'failed',
         jobId: job.id,
         error: spawnErr.message,
-        activeJob
+        activeJob: activeJob.jobId === job.id ? activeJob : formatJobForClient(job)
       });
-      scheduleActiveJobReset();
       return reject(spawnErr);
     }
 
-    currentFFmpegProcess = ffmpegProc;
+    setProcessActive(job.id, ffmpegProc);
+    if (queueManager && typeof queueManager.attachProcess === 'function') {
+      queueManager.attachProcess(job.id, ffmpegProc);
+    }
     armWatchdog();
     let rawStderr = '';
     let stderrBuffer = '';
@@ -2155,8 +2243,7 @@ function _executeJobInternal(job) {
         armWatchdog();
         const text = chunk.toString();
         rawStderr += text;
-        job.logs.push(text);
-        if (job.logs.length > 300) job.logs.shift();
+        appendJobLogSafe(job, text);
       });
     }
 
@@ -2167,25 +2254,28 @@ function _executeJobInternal(job) {
       rawStderr += text;
       stderrBuffer += text;
 
-      job.logs.push(text);
-      if (job.logs.length > 300) job.logs.shift();
+      appendJobLogSafe(job, text);
 
+      const jobDurationSec = job.totalDurationSec || job.expectedDuration || 0;
       // 1. Fallback: Parse total duration from FFmpeg initial stderr if ffprobe failed or returned 0
-      if (!activeJob.totalDurationSec || activeJob.totalDurationSec <= 0) {
+      if (!jobDurationSec || jobDurationSec <= 0) {
         const durMatch = stderrBuffer.match(/Duration:\s*(\d{2}:\d{2}:\d{2}(?:\.\d+)?)/i);
         if (durMatch && durMatch[1]) {
           const durSec = parseTimeToSeconds(durMatch[1]);
           if (durSec > 0) {
-            activeJob.totalDurationSec = durSec;
-            activeJob.totalDuration = formatTime(durSec);
             job.expectedDuration = durSec;
-            console.log(`[FFmpeg Fallback] Duration parsed from stderr: ${activeJob.totalDuration} (${durSec}s)`);
+            job.totalDurationSec = durSec;
+            job.totalDuration = formatTime(durSec);
+            if (activeJob.jobId === job.id) {
+              activeJob.totalDurationSec = durSec;
+              activeJob.totalDuration = job.totalDuration;
+            }
+            console.log(`[FFmpeg Fallback] Duration parsed from stderr: ${job.totalDuration} (${durSec}s)`);
           }
         }
       }
 
       // 2. Extract time=(\d{2}:\d{2}:\d{2}(?:\.\d+)?) and speed=(\s*[\d\.]+x|N/A)
-      // Matches both standard format time=00:01:23.45 and user specified time=(\d{2}:\d{2}:\d{2}\.\d{2})
       const timeMatches = [...stderrBuffer.matchAll(/time=\s*(\d{2}:\d{2}:\d{2}(?:\.\d+)?)/g)];
       const speedMatches = [...stderrBuffer.matchAll(/speed=\s*(\d+(?:\.\d+)?x|N\/A)/gi)];
 
@@ -2194,43 +2284,52 @@ function _executeJobInternal(job) {
         const curSec = parseTimeToSeconds(lastTime);
         const formattedCurTime = formatTime(curSec);
 
-        let curSpeed = activeJob.speed || 'N/A';
+        let curSpeed = job.speed || 'N/A';
         if (speedMatches.length > 0) {
           curSpeed = speedMatches[speedMatches.length - 1][1].trim();
         }
 
+        const effectiveDuration = job.totalDurationSec || job.expectedDuration || 0;
         let progressPercent = 0;
-        if (activeJob.totalDurationSec > 0) {
-          progressPercent = Math.min(99, Math.max(0, Math.round((curSec / activeJob.totalDurationSec) * 100)));
+        if (effectiveDuration > 0) {
+          progressPercent = Math.min(99, Math.max(0, Math.round((curSec / effectiveDuration) * 100)));
         }
 
-        // Update activeJob state
-        activeJob.currentTime = formattedCurTime;
-        activeJob.speed = curSpeed;
-        activeJob.progress = progressPercent;
-        job.progress.time = formattedCurTime;
-        job.progress.speed = curSpeed;
-        job.progress.percent = progressPercent;
+        job.currentTime = formattedCurTime;
+        job.speed = curSpeed;
+        if (!job.progress || typeof job.progress !== 'object') {
+          job.progress = { percent: progressPercent, time: formattedCurTime, speed: curSpeed };
+        } else {
+          job.progress.time = formattedCurTime;
+          job.progress.speed = curSpeed;
+          job.progress.percent = progressPercent;
+        }
 
-        // Backend console.log so user can confirm data is flowing in Termux logs
-        console.log(`[FFmpeg Progress] Job ${job.id}: ${progressPercent}% | Time: ${formattedCurTime} / ${activeJob.totalDuration} | Speed: ${curSpeed}`);
+        if (activeJob.jobId === job.id) {
+          activeJob.currentTime = formattedCurTime;
+          activeJob.speed = curSpeed;
+          activeJob.progress = progressPercent;
+        }
+
+        const totDurStr = job.totalDuration || formatTime(effectiveDuration);
+        console.log(`[FFmpeg Progress] Job ${job.id}: ${progressPercent}% | Time: ${formattedCurTime} / ${totDurStr} | Speed: ${curSpeed}`);
 
         notifyJobSubscribers(job.id, {
           type: 'progress',
           jobId: job.id,
           progress: progressPercent,
           currentTime: formattedCurTime,
-          totalDuration: activeJob.totalDuration,
+          totalDuration: totDurStr,
           speed: curSpeed,
           activeJob: {
-            status: activeJob.status,
-            filePath: activeJob.filePath,
-            filename: activeJob.filename,
+            status: job.status,
+            filePath: job.filePath,
+            filename: job.filename,
             progress: progressPercent,
             currentTime: formattedCurTime,
-            totalDuration: activeJob.totalDuration,
+            totalDuration: totDurStr,
             speed: curSpeed,
-            outputPath: activeJob.outputPath
+            outputPath: job.outputPath
           }
         });
       }
@@ -2247,10 +2346,15 @@ function _executeJobInternal(job) {
       if (job._settled) return;
       job._settled = true;
       clearWatchdog();
-      currentFFmpegProcess = null;
-      if (job.status === 'cancelled' || activeJob.status === 'cancelled') {
-        activeJob.filePath = '';
-        activeJob.outputPath = '';
+      clearProcessActive(job.id);
+      if (queueManager && typeof queueManager.detachProcess === 'function') {
+        queueManager.detachProcess(job.id);
+      }
+      if (job.status === 'cancelled' || (activeJob.jobId === job.id && activeJob.status === 'cancelled')) {
+        if (activeJob.jobId === job.id) {
+          activeJob.filePath = '';
+          activeJob.outputPath = '';
+        }
         if (concurrencyLock && concurrencyLock.removeFile) {
           concurrencyLock.removeFile(job.filePath);
           concurrencyLock.removeFile(job.outputPath);
@@ -2269,10 +2373,13 @@ function _executeJobInternal(job) {
       job.error = err.message;
       job.completedAt = Date.now();
 
-      activeJob.status = 'failed';
-      activeJob.error = err.message;
-      activeJob.filePath = '';
-      activeJob.outputPath = '';
+      if (activeJob.jobId === job.id || isPrimaryActiveJob()) {
+        activeJob.status = 'failed';
+        activeJob.error = err.message;
+        activeJob.filePath = '';
+        activeJob.outputPath = '';
+        scheduleActiveJobReset(job.id);
+      }
       if (concurrencyLock && concurrencyLock.removeFile) {
         concurrencyLock.removeFile(job.filePath);
         concurrencyLock.removeFile(job.outputPath);
@@ -2284,23 +2391,25 @@ function _executeJobInternal(job) {
         jobId: job.id,
         isDirectPath: true,
         error: err.message,
-        activeJob,
+        activeJob: activeJob.jobId === job.id ? activeJob : formatJobForClient(job),
         stderr: rawStderr
       });
-      scheduleActiveJobReset();
       reject(err);
     });
 
     ffmpegProc.on('close', async (code) => {
       if (job._settled) return;
       clearWatchdog();
-      currentFFmpegProcess = null;
-      if (job.status === 'cancelled' || activeJob.status === 'cancelled') {
-        // Settle the promise so cancelled jobs do not leak a permanently
-        // pending promise (and its captured job state).
+      clearProcessActive(job.id);
+      if (queueManager && typeof queueManager.detachProcess === 'function') {
+        queueManager.detachProcess(job.id);
+      }
+      if (job.status === 'cancelled' || (activeJob.jobId === job.id && activeJob.status === 'cancelled')) {
         job._settled = true;
-        activeJob.filePath = '';
-        activeJob.outputPath = '';
+        if (activeJob.jobId === job.id) {
+          activeJob.filePath = '';
+          activeJob.outputPath = '';
+        }
         if (concurrencyLock && concurrencyLock.removeFile) {
           concurrencyLock.removeFile(job.filePath);
           concurrencyLock.removeFile(job.outputPath);
@@ -2321,7 +2430,7 @@ function _executeJobInternal(job) {
             if (detected && isPathAllowed(detected) && fs.existsSync(detected)) {
               resolvedOutput = detected;
               job.outputPath = detected;
-              activeJob.outputPath = detected;
+              if (activeJob.jobId === job.id) activeJob.outputPath = detected;
             }
           }
         }
@@ -2329,13 +2438,6 @@ function _executeJobInternal(job) {
         const fileExists = Boolean(resolvedOutput && fs.existsSync(resolvedOutput));
 
         if (code === 0 && (fileExists || (job.isCustom && !job.outputPath))) {
-          job.status = 'completed';
-          job.progress.percent = 100;
-
-          activeJob.status = 'completed';
-          activeJob.progress = 100;
-          activeJob.currentTime = activeJob.totalDuration;
-
           if (fileExists) {
             const stat = fs.statSync(resolvedOutput);
             const meta = await probeMedia(resolvedOutput).catch(() => null);
@@ -2351,12 +2453,22 @@ function _executeJobInternal(job) {
               metadata: meta,
               expiresAt: Date.now() + (30 * 60 * 1000)
             };
-            activeJob.outputFile = job.outputFile;
           }
 
-          // Active processing has settled: release locks immediately
-          activeJob.filePath = '';
-          activeJob.outputPath = '';
+          job.status = 'completed';
+          if (!job.progress || typeof job.progress !== 'object') job.progress = {};
+          job.progress.percent = 100;
+
+          if (activeJob.jobId === job.id || isPrimaryActiveJob()) {
+            activeJob.status = 'completed';
+            activeJob.progress = 100;
+            activeJob.currentTime = activeJob.totalDuration;
+            if (job.outputFile) activeJob.outputFile = job.outputFile;
+            activeJob.filePath = '';
+            activeJob.outputPath = '';
+            scheduleActiveJobReset(job.id);
+          }
+
           if (concurrencyLock && concurrencyLock.removeFile) {
             concurrencyLock.removeFile(job.filePath);
             concurrencyLock.removeFile(job.outputPath);
@@ -2365,19 +2477,19 @@ function _executeJobInternal(job) {
             }
           }
 
+          const clientPayload = activeJob.jobId === job.id ? activeJob : formatJobForClient(job);
           notifyJobSubscribers(job.id, {
             type: 'status',
             status: 'completed',
             jobId: job.id,
             isDirectPath: true,
             progress: 100,
-            currentTime: activeJob.totalDuration,
-            totalDuration: activeJob.totalDuration,
-            speed: activeJob.speed,
-            activeJob,
+            currentTime: clientPayload.totalDuration,
+            totalDuration: clientPayload.totalDuration,
+            speed: clientPayload.speed,
+            activeJob: clientPayload,
             outputFile: job.outputFile
           });
-          scheduleActiveJobReset();
           job._settled = true;
           resolve(job);
         } else {
@@ -2411,7 +2523,9 @@ function _executeJobInternal(job) {
             job.executable = 'ffmpeg';
             job.execArgs = fallbackArgs;
             job.commandString = buildSafeFfmpegCommand(fallbackArgs, resolvedPath, job.outputPath, 'ffmpeg');
-            activeJob.commandString = job.commandString;
+            if (activeJob.jobId === job.id) {
+              activeJob.commandString = job.commandString;
+            }
 
             return executeJob(job, true).then(resolve).catch(reject);
           }
@@ -2445,10 +2559,13 @@ function _executeJobInternal(job) {
             job.error = `FFmpeg exited with error code ${code}`;
           }
 
-          activeJob.status = 'failed';
-          activeJob.error = job.error;
-          activeJob.filePath = '';
-          activeJob.outputPath = '';
+          if (activeJob.jobId === job.id || isPrimaryActiveJob()) {
+            activeJob.status = 'failed';
+            activeJob.error = job.error;
+            activeJob.filePath = '';
+            activeJob.outputPath = '';
+            scheduleActiveJobReset(job.id);
+          }
           if (concurrencyLock && concurrencyLock.removeFile) {
             concurrencyLock.removeFile(job.filePath);
             concurrencyLock.removeFile(job.outputPath);
@@ -2463,25 +2580,26 @@ function _executeJobInternal(job) {
             jobId: job.id,
             isDirectPath: true,
             error: job.error,
-            activeJob,
+            activeJob: activeJob.jobId === job.id ? activeJob : formatJobForClient(job),
             stderr: job.stderr
           });
-          scheduleActiveJobReset();
           reject(new Error(job.error));
         }
       } catch (closeErr) {
         job._settled = true;
         job.status = 'failed';
         job.error = closeErr.message;
-        activeJob.status = 'failed';
-        activeJob.error = closeErr.message;
-        activeJob.filePath = '';
-        activeJob.outputPath = '';
+        if (activeJob.jobId === job.id || isPrimaryActiveJob()) {
+          activeJob.status = 'failed';
+          activeJob.error = closeErr.message;
+          activeJob.filePath = '';
+          activeJob.outputPath = '';
+          scheduleActiveJobReset(job.id);
+        }
         if (concurrencyLock && concurrencyLock.removeFile) {
           concurrencyLock.removeFile(job.filePath);
           concurrencyLock.removeFile(job.outputPath);
         }
-        scheduleActiveJobReset();
         reject(closeErr);
       }
     });
@@ -2662,12 +2780,14 @@ function friendlyImageError(err, label) {
 }
 
 function imageFileUrls(filePath) {
-  const encoded = encodeURIComponent(filePath);
-  const filename = path.basename(filePath);
-  const isProcessedOrTemp = filePath.startsWith(PROCESSED_DIR) || filePath.startsWith(TEMP_UPLOADS_DIR);
+  const resolved = path.resolve(String(filePath));
+  const encoded = encodeURIComponent(resolved);
+  const filename = path.basename(resolved);
+  const parent = path.dirname(resolved);
+  const isDirectInRoot = parent === path.resolve(PROCESSED_DIR) || parent === path.resolve(TEMP_UPLOADS_DIR);
   return {
     previewUrl: `/api/image/preview?path=${encoded}`,
-    downloadUrl: isProcessedOrTemp ? `/api/download/${encodeURIComponent(filename)}` : `/api/image/preview?path=${encoded}&download=1`
+    downloadUrl: isDirectInRoot ? `/api/download/${encodeURIComponent(filename)}` : `/api/image/preview?path=${encoded}&download=1`
   };
 }
 
@@ -3009,7 +3129,7 @@ async function processImageFile(inputPath, normalized) {
   const sourceMeta = await readImageMetadata(inputPath);
   const sourceWidth = sourceMeta.width;
   const sourceHeight = sourceMeta.height;
-  const fallbackDir = (inputPath.startsWith(TEMP_UPLOADS_DIR) || normalized.isRemoteUpload)
+  const fallbackDir = (isPathWithinRoot(path.resolve(inputPath), path.resolve(TEMP_UPLOADS_DIR)) || normalized.isRemoteUpload)
     ? PROCESSED_DIR
     : path.dirname(inputPath);
   const outputDir = ensureImageOutputDir(normalized.outputDir, fallbackDir);
@@ -3750,7 +3870,68 @@ app.post('/api/probe-file', async (req, res) => {
   }
 });
 
-// 4c. Automatic Video Thumbnail Generator
+// 4c. Automatic Video Thumbnail Generator (deduplicated + atomic writes)
+const inflightThumbnails = new Map();
+
+function generateThumbnailFile(resolvedPath, thumbFile) {
+  if (inflightThumbnails.has(thumbFile)) {
+    return inflightThumbnails.get(thumbFile);
+  }
+
+  const runExec = (args) => new Promise((resolve, reject) => {
+    execFile('ffmpeg', args, { timeout: 10000 }, (err) => {
+      if (err) return reject(err);
+      resolve();
+    });
+  });
+
+  const promise = (async () => {
+    let seekTime = '00:00:05';
+    try {
+      const dur = await getVideoDuration(resolvedPath);
+      if (dur > 0 && dur < 10) {
+        const half = Math.max(0.1, dur / 2);
+        seekTime = formatTime(half);
+      }
+    } catch (e) {}
+
+    const tempThumb = `${thumbFile}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp.jpg`;
+    const runAttempt = async (seek) => {
+      await runExec([
+        '-hide_banner',
+        '-ss', seek,
+        '-i', resolvedPath,
+        '-vframes', '1',
+        '-f', 'image2',
+        '-update', '1',
+        '-y',
+        tempThumb
+      ]);
+      if (!fs.existsSync(tempThumb) || fs.statSync(tempThumb).size === 0) {
+        throw new Error('Empty thumbnail output');
+      }
+    };
+
+    try {
+      try {
+        await runAttempt(seekTime);
+      } catch (e) {
+        await runAttempt('00:00:01');
+      }
+      fs.renameSync(tempThumb, thumbFile);
+      return thumbFile;
+    } finally {
+      if (fs.existsSync(tempThumb)) {
+        try { fs.unlinkSync(tempThumb); } catch (e) {}
+      }
+      inflightThumbnails.delete(thumbFile);
+    }
+  })();
+
+  inflightThumbnails.set(thumbFile, promise);
+  return promise;
+}
+
 // GET /api/get-thumbnail?path=/sdcard/movie.mp4
 app.get('/api/get-thumbnail', async (req, res) => {
   try {
@@ -3780,49 +3961,17 @@ app.get('/api/get-thumbnail', async (req, res) => {
       return res.sendFile(thumbFile);
     }
 
-    // Determine seek time: seek at 5s, or duration/2 if video is short
-    let seekTime = '00:00:05';
     try {
-      const dur = await getVideoDuration(resolvedPath);
-      if (dur > 0 && dur < 10) {
-        const half = Math.max(0.1, (dur / 2));
-        seekTime = formatTime(half);
-      }
-    } catch (e) {}
+      await generateThumbnailFile(resolvedPath, thumbFile);
+    } catch (genErr) {
+      return res.status(404).send('Failed to generate thumbnail');
+    }
 
-    execFile('ffmpeg', [
-      '-hide_banner',
-      '-ss', seekTime,
-      '-i', resolvedPath,
-      '-vframes', '1',
-      '-f', 'image2',
-      '-update', '1',
-      '-y',
-      thumbFile
-    ], { timeout: 10000 }, (err) => {
-      if (err || !fs.existsSync(thumbFile) || fs.statSync(thumbFile).size === 0) {
-        // Fallback: Seek at 00:00:01
-        execFile('ffmpeg', [
-          '-hide_banner',
-          '-ss', '00:00:01',
-          '-i', resolvedPath,
-          '-vframes', '1',
-          '-f', 'image2',
-          '-update', '1',
-          '-y',
-          thumbFile
-        ], { timeout: 10000 }, (err2) => {
-          if (err2 || !fs.existsSync(thumbFile) || fs.statSync(thumbFile).size === 0) {
-            return res.status(404).send('Failed to generate thumbnail');
-          }
-          res.setHeader('Cache-Control', 'public, max-age=86400');
-          res.sendFile(thumbFile);
-        });
-      } else {
-        res.setHeader('Cache-Control', 'public, max-age=86400');
-        res.sendFile(thumbFile);
-      }
-    });
+    if (!fs.existsSync(thumbFile) || fs.statSync(thumbFile).size === 0) {
+      return res.status(404).send('Failed to generate thumbnail');
+    }
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.sendFile(thumbFile);
   } catch (err) {
     console.error('[Thumbnail Error]:', err.message);
     res.status(err.status || 500).send('Thumbnail error: ' + err.message);
@@ -3841,32 +3990,16 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
     });
   }
 
-  const clientSessionId = req.body?.sessionId || req.headers['x-session-id'] || null;
-
-  activeJob.status = 'processing';
-  activeJob.sessionId = clientSessionId;
-  activeJob.jobId = null;
-  activeJob.filePath = req.body?.filePath || '';
-  activeJob.filename = req.body?.filePath ? path.basename(req.body.filePath) : '';
-  activeJob.progress = 0;
-  activeJob.error = null;
-  activeJob.startedAt = Date.now();
-
+  let resolvedPath = null;
   try {
     const { filePath, operation, options = {}, operations, audioTracks, subtitleConfig, hardwareAccel, isLosslessCopy, muteAudio } = req.body;
 
     if (!filePath) {
-      activeJob.status = 'idle';
-      activeJob.filePath = '';
-      activeJob.outputPath = '';
       return res.status(400).json({ error: 'Absolute file path is required' });
     }
 
-    const resolvedPath = assertPathAllowed(filePath, 'Media file');
+    resolvedPath = assertPathAllowed(filePath, 'Media file');
     if (!fs.existsSync(resolvedPath)) {
-      activeJob.status = 'idle';
-      activeJob.filePath = '';
-      activeJob.outputPath = '';
       return res.status(404).json({ error: `File not found on storage: ${filePath}` });
     }
 
@@ -3889,9 +4022,6 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
     let jobOpName = operation || 'multi_op';
 
     if (isMultiOp) {
-      // Guard against an "empty" multi-op request (e.g. a stale client that
-      // only sent hardwareAccel flags) which would otherwise produce a no-op
-      // re-encode with no user intent.
       const hasAnyOperation = Boolean(
         (operations.format && operations.format.enabled !== false) ||
         (operations.resize && operations.resize.enabled !== false) ||
@@ -3899,21 +4029,19 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
         (operations.audioOnly === true || (operations.audioOnly && operations.audioOnly.enabled))
       );
       if (!hasAnyOperation) {
-        activeJob.status = 'idle';
-        activeJob.filePath = '';
-        activeJob.outputPath = '';
         return res.status(400).json({ error: 'Select at least one operation (Convert, Compress/Resize, Trim, or Extract audio).' });
       }
 
       const isAudioOnly = Boolean(operations.audioOnly === true || operations.audioOnly?.enabled);
-      const fmt = operations.format ? (typeof operations.format === 'string' ? operations.format : operations.format.format) : null;
+      const rawFmt = operations.format ? (typeof operations.format === 'string' ? operations.format : operations.format.format) : null;
+      const fmt = rawFmt ? normalizeOutputFormatName(rawFmt) : null;
 
       if (isAudioOnly) {
-        outExt = fmt ? `.${fmt.toLowerCase()}` : '.mp3';
+        outExt = fmt ? `.${fmt}` : '.mp3';
         jobOpName = 'audio_extract';
       } else if (fmt) {
-        outExt = `.${fmt.toLowerCase()}`;
-        jobOpName = fmt.toLowerCase();
+        outExt = `.${fmt}`;
+        jobOpName = fmt;
       } else {
         outExt = path.extname(resolvedPath) || '.mp4';
         jobOpName = 'multi';
@@ -3924,9 +4052,6 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
         const startSec = operations.trim.start ? parseTimeToSeconds(operations.trim.start) : 0;
         const endSec = operations.trim.end ? parseTimeToSeconds(operations.trim.end) : null;
         if (endSec !== null && endSec <= startSec) {
-          activeJob.status = 'idle';
-          activeJob.filePath = '';
-          activeJob.outputPath = '';
           return res.status(400).json({ error: 'Trim End time must be greater than Start time.' });
         }
         if (endSec !== null && endSec > startSec) {
@@ -3950,15 +4075,20 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
       }
 
       if (operation === 'convert') {
-        outExt = `.${(options.format || 'mp4').toLowerCase()}`;
+        const fmt = normalizeOutputFormatName(options.format || 'mp4') || 'mp4';
+        options.format = fmt;
+        outExt = `.${fmt}`;
       } else if (operation === 'change_audio' || operation === 'speed') {
         outExt = path.extname(resolvedPath) || '.mp4';
       } else if (operation === 'extract_audio') {
-        outExt = `.${(options.format || 'mp3').toLowerCase()}`;
+        const fmt = normalizeOutputFormatName(options.format || 'mp3') || 'mp3';
+        options.format = fmt;
+        outExt = `.${fmt}`;
       } else if (operation === 'gif') {
         outExt = '.gif';
       } else if (operation === 'raw' && options.outputExt) {
-        outExt = `.${options.outputExt.replace('.', '')}`;
+        const safeRawExt = normalizeOutputFormatName(options.outputExt);
+        outExt = `.${safeRawExt}`;
       }
     }
 
@@ -3967,8 +4097,9 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
     const ext = path.extname(resolvedPath);
     const base = path.basename(resolvedPath, ext);
 
-    const isRemoteUpload = Boolean(req.body.isRemoteUpload || resolvedPath.startsWith(TEMP_UPLOADS_DIR));
-    const outputFilename = `${base}_${jobOpName}${outExt}`;
+    const isRemoteUpload = Boolean(req.body.isRemoteUpload || isPathWithinRoot(path.resolve(resolvedPath), path.resolve(TEMP_UPLOADS_DIR)));
+    const safeJobOp = String(jobOpName || 'process').replace(/[^a-z0-9_-]/gi, '_');
+    const outputFilename = `${base}_${safeJobOp}${outExt}`;
     let outputPath = isRemoteUpload
       ? path.join(PROCESSED_DIR, outputFilename)
       : path.join(dir, outputFilename);
@@ -3981,7 +4112,6 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
     }
 
     if (!isRemoteUpload) {
-      // Check directory write permission, fallback to /sdcard/Download or Home if read-only
       try {
         fs.accessSync(dir, fs.constants.W_OK);
       } catch (wErr) {
@@ -3989,6 +4119,7 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
         outputPath = path.join(fallbackDir, outputFilename);
       }
     }
+    outputPath = assertPathAllowed(outputPath, 'Output file');
 
     // Build FFmpeg command arguments dynamically or via legacy builder
     const effectiveSubConfig = subtitleConfig || (operations && operations.subtitleConfig) || {};
@@ -4013,10 +4144,9 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
 
     const jobId = `job_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     const commandString = buildSafeFfmpegCommand(ffmpegArgs, resolvedPath, outputPath, 'ffmpeg');
-
     const clientSessionId = req.body.sessionId || req.headers['x-session-id'] || null;
 
-    const job = {
+    const jobPayload = {
       id: jobId,
       sessionId: clientSessionId,
       name: `${jobOpName.toUpperCase()} - ${path.basename(resolvedPath)}`,
@@ -4026,71 +4156,37 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
       isHardwareAccel: effectiveHwAccel,
       isRemoteUpload,
       meta,
-      status: 'processing',
+      status: 'queued',
       isDirectPath: true,
       createdAt: Date.now(),
-      startedAt: Date.now(),
-      completedAt: null,
+      totalDuration: totalDurationStr,
+      totalDurationSec: totalDurationSec || meta.duration || 0,
       expectedDuration: totalDurationSec || meta.duration || 0,
+      filePath: resolvedPath,
       inputPaths: [resolvedPath],
       outputPath,
-      outputFile: null,
       ffmpegArgs,
       executable: 'ffmpeg',
       execArgs: ffmpegArgs,
       workingDir: isRemoteUpload ? PROCESSED_DIR : dir,
-      commandString,
-      progress: {
-        percent: 0,
-        time: '00:00:00',
-        fps: 0,
-        speed: '0x'
-      },
-      logs: [],
-      error: null
+      commandString
     };
 
-    activeJob = {
-      jobId,
-      sessionId: clientSessionId,
-      status: 'processing',
-      filePath: resolvedPath,
-      filename: path.basename(resolvedPath),
-      operation: jobOpName,
-      progress: 0,
-      isRemoteUpload,
-      currentTime: '00:00:00',
-      totalDuration: totalDurationStr,
-      totalDurationSec,
-      speed: '0.0x',
-      outputPath,
-      commandString,
-      error: null,
-      outputFile: null
-    };
-
-    jobs.set(jobId, job);
-
-    try {
-      queueManager.enqueue(job);
-    } catch (qErr) {
-      return res.status(qErr.status || 500).json({ success: false, error: qErr.message });
-    }
+    const canonicalJob = queueManager.enqueue(jobPayload);
+    jobs.set(jobId, canonicalJob);
 
     res.json({
       success: true,
       jobId,
-      name: job.name,
+      name: canonicalJob.name,
       outputPath,
-      commandString: job.commandString,
-      activeJob
+      commandString: canonicalJob.commandString,
+      activeJob: activeJob.jobId === jobId ? activeJob : formatJobForClient(canonicalJob)
     });
   } catch (err) {
     console.error('Process error:', err);
-    activeJob.status = 'idle';
-    activeJob.filePath = '';
-    activeJob.outputPath = '';
-    res.status(err.status || 500).json({ error: err.message });
+    // Keep temp upload on validation/enqueue error so user can fix options and retry without 404.
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
 
@@ -4106,38 +4202,21 @@ app.post('/api/run-custom', async (req, res) => {
     });
   }
 
-  const clientSessionId = req.body?.sessionId || req.headers['x-session-id'] || null;
-
-  activeJob.status = 'processing';
-  activeJob.sessionId = clientSessionId;
-  activeJob.jobId = null;
-  activeJob.filePath = req.body?.filePath || '';
-  activeJob.filename = req.body?.filePath ? path.basename(req.body.filePath) : '';
-  activeJob.progress = 0;
-  activeJob.error = null;
-  activeJob.startedAt = Date.now();
-
+  let resolvedPath = null;
   try {
+    const clientSessionId = req.body?.sessionId || req.headers['x-session-id'] || null;
     const { command, filePath } = req.body || {};
 
     if (!command || typeof command !== 'string' || !command.trim()) {
-      activeJob.status = 'idle';
-      activeJob.filePath = '';
-      activeJob.outputPath = '';
       return res.status(400).json({ error: 'Command string is required.' });
     }
 
-    // Resolve input filePath if given
-    let resolvedPath = null;
     let totalDurationSec = 0;
     let meta = null;
 
     if (filePath) {
       resolvedPath = assertPathAllowed(filePath, 'Media file');
       if (!fs.existsSync(resolvedPath)) {
-        activeJob.status = 'idle';
-        activeJob.filePath = '';
-        activeJob.outputPath = '';
         return res.status(404).json({ error: `File not found on storage: ${filePath}` });
       }
       try {
@@ -4158,78 +4237,46 @@ app.post('/api/run-custom', async (req, res) => {
     const filename = resolvedPath ? path.basename(resolvedPath) : 'custom_command';
     const jobId = `job_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
-    // Initialize global activeJob
-    activeJob = {
-      jobId,
-      sessionId: clientSessionId,
-      status: 'processing',
-      filePath: resolvedPath || '',
-      filename,
-      operation: 'custom',
-      progress: 0,
-      currentTime: '00:00:00',
-      totalDuration: totalDurationStr,
-      totalDurationSec,
-      speed: '0.0x',
-      outputPath: detectedOutput || '',
-      commandString: displayCommand,
-      error: null,
-      outputFile: null
-    };
-
-    const job = {
+    const jobPayload = {
       id: jobId,
       sessionId: clientSessionId,
       name: `CUSTOM - ${filename}`,
+      filename,
       operation: 'custom',
       isCustom: true,
       executable,
       execArgs,
       workingDir: cwd,
       options: { command: displayCommand, filePath: resolvedPath },
-      status: 'processing',
+      status: 'queued',
       isDirectPath: true,
+      isRemoteUpload: Boolean(req.body?.isRemoteUpload || (resolvedPath && isPathWithinRoot(resolvedPath, path.resolve(TEMP_UPLOADS_DIR)))),
       createdAt: Date.now(),
-      startedAt: Date.now(),
-      completedAt: null,
+      totalDuration: totalDurationStr,
+      totalDurationSec: totalDurationSec || 0,
       expectedDuration: totalDurationSec || 0,
+      filePath: resolvedPath || '',
       inputPaths: resolvedPath ? [resolvedPath] : [],
       outputPath: detectedOutput || '',
-      outputFile: null,
       ffmpegArgs: execArgs,
-      commandString: displayCommand,
-      progress: {
-        percent: 0,
-        time: '00:00:00',
-        fps: 0,
-        speed: '0x'
-      },
-      logs: [],
-      error: null
+      commandString: displayCommand
     };
 
-    jobs.set(jobId, job);
-
-    try {
-      queueManager.enqueue(job);
-    } catch (qErr) {
-      return res.status(qErr.status || 500).json({ success: false, error: qErr.message });
-    }
+    const canonicalJob = queueManager.enqueue(jobPayload);
+    jobs.set(jobId, canonicalJob);
 
     res.json({
       success: true,
       jobId,
-      name: job.name,
+      name: canonicalJob.name,
       outputPath: detectedOutput || '',
       commandString: displayCommand,
-      activeJob
+      activeJob: activeJob.jobId === jobId ? activeJob : formatJobForClient(canonicalJob)
     });
   } catch (err) {
     console.error('[Run Custom] Error starting custom job:', err);
-    activeJob.status = 'idle';
-    activeJob.filePath = '';
-    activeJob.outputPath = '';
-    res.status(err.status || 500).json({ error: err.message });
+    // Keep temp upload on validation/enqueue error so user can fix command and retry without 404.
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
 
@@ -4239,11 +4286,11 @@ app.post('/api/cancel-job', (req, res) => {
   try {
     const clientSessionId = req.body?.sessionId || req.headers['x-session-id'] || null;
     const targetJobId = req.body && req.body.jobId ? req.body.jobId : activeJob.jobId;
-    const job = targetJobId ? jobs.get(targetJobId) : null;
+    const job = targetJobId ? (jobs.get(targetJobId) || jobManager.getJob(targetJobId)) : null;
 
-    // Security check: If target job has a sessionId and caller has a sessionId that doesn't match, block cancellation!
+    // Security check: If target job has a sessionId, caller MUST provide the matching sessionId
     const jobSession = (job && job.sessionId) || activeJob.sessionId;
-    if (jobSession && clientSessionId && jobSession !== clientSessionId) {
+    if (jobSession && jobSession !== clientSessionId) {
       return res.status(403).json({
         success: false,
         error: 'Unauthorized: You cannot cancel a job belonging to another session.'
@@ -4263,12 +4310,11 @@ app.post('/api/cancel-job', (req, res) => {
       });
     }
 
-    // Only treat this as a real cancellation when something is actually
-    // running. Otherwise a stray request (or a stale Stop click) would mark a
-    // finished job as cancelled and — worse — delete its completed output file.
-    const isActuallyRunning = Boolean(currentFFmpegProcess) ||
+    const resolvedTargetId = targetJobId || activeJob.jobId;
+    const targetProc = (resolvedTargetId && activeProcesses.get(resolvedTargetId)) || (job && job._process) || (!targetJobId ? currentFFmpegProcess : null);
+    const isActuallyRunning = Boolean(targetProc) ||
       (job && job.status === 'processing') ||
-      activeJob.status === 'processing';
+      (activeJob.status === 'processing' && activeJob.jobId === resolvedTargetId);
 
     if (!isActuallyRunning) {
       console.log('[Cancel Job] Ignored: no active job is running.');
@@ -4279,9 +4325,9 @@ app.post('/api/cancel-job', (req, res) => {
       });
     }
 
-    const outputPath = (job && job.outputPath) || activeJob.outputPath;
+    const outputPath = (job && job.outputPath) || (activeJob.jobId === resolvedTargetId ? activeJob.outputPath : '');
 
-    console.log(`[Cancel Job] Stop request received for job: ${targetJobId || activeJob.jobId}`);
+    console.log(`[Cancel Job] Stop request received for job: ${resolvedTargetId}`);
 
     // Update job state in store
     if (job) {
@@ -4290,33 +4336,34 @@ app.post('/api/cancel-job', (req, res) => {
       job.error = 'Conversion cancelled by user';
     }
 
-    // Update global activeJob state
-    activeJob.status = 'cancelled';
-    activeJob.error = 'Conversion cancelled by user';
+    const isGlobalActiveTarget = activeJob.jobId === resolvedTargetId || !activeJob.jobId;
+    if (isGlobalActiveTarget) {
+      activeJob.status = 'cancelled';
+      activeJob.error = 'Conversion cancelled by user';
+    }
 
     try {
-      queueManager.cancelJob(targetJobId || activeJob.jobId, clientSessionId);
+      queueManager.cancelJob(resolvedTargetId, clientSessionId);
     } catch (e) {}
 
-    // Forcefully kill active FFmpeg process if running
-    if (currentFFmpegProcess) {
+    // Forcefully kill ONLY the targeted FFmpeg process if running
+    if (targetProc) {
       try {
-        console.log(`[Cancel Job] Killing FFmpeg process (PID: ${currentFFmpegProcess.pid}) with SIGKILL`);
-        const pidToKill = currentFFmpegProcess.pid;
-        currentFFmpegProcess.kill('SIGKILL');
+        console.log(`[Cancel Job] Killing FFmpeg process (PID: ${targetProc.pid}) for job ${resolvedTargetId} with SIGKILL`);
+        const pidToKill = targetProc.pid;
+        targetProc.kill('SIGKILL');
         if (pidToKill) {
           try {
             process.kill(-pidToKill, 'SIGKILL');
           } catch (e) {}
           try {
-            // Extra fallback for Termux: use shell kill command which works more reliably
             exec(`kill -9 ${pidToKill} 2>/dev/null; pkill -9 -P ${pidToKill} 2>/dev/null`, () => {});
           } catch (e) {}
         }
       } catch (killErr) {
         console.warn('[Cancel Job] Error killing process:', killErr.message);
       }
-      currentFFmpegProcess = null;
+      clearProcessActive(resolvedTargetId);
     }
 
     // Clean up partially created output file if exists
@@ -4330,21 +4377,27 @@ app.post('/api/cancel-job', (req, res) => {
     }
 
     // Rule D: Immediately delete temp uploaded input file on cancel
-    cleanupTempUploadsOnError(activeJob.filePath, job && job.filePath, ...(job && job.inputPaths ? job.inputPaths : []));
+    cleanupTempUploadsOnError(
+      isGlobalActiveTarget ? activeJob.filePath : null,
+      job && job.filePath,
+      ...(job && job.inputPaths ? job.inputPaths : [])
+    );
 
-    // Send SSE update to the frontend indicating the job is cancelled
     const ssePayload = {
       type: 'status',
       status: 'cancelled',
-      jobId: targetJobId || activeJob.jobId,
+      jobId: resolvedTargetId,
       message: 'Conversion cancelled by user',
-      activeJob: formatJobForClient(activeJob)
+      activeJob: isGlobalActiveTarget ? formatJobForClient(activeJob) : formatJobForClient(job)
     };
 
-    const cancelledFilePath = activeJob.filePath;
-    const cancelledOutputPath = activeJob.outputPath;
-    activeJob.filePath = '';
-    activeJob.outputPath = '';
+    const cancelledFilePath = isGlobalActiveTarget ? activeJob.filePath : '';
+    const cancelledOutputPath = isGlobalActiveTarget ? activeJob.outputPath : '';
+    if (isGlobalActiveTarget) {
+      activeJob.filePath = '';
+      activeJob.outputPath = '';
+      scheduleActiveJobReset(resolvedTargetId);
+    }
     if (concurrencyLock && concurrencyLock.removeFile) {
       concurrencyLock.removeFile(cancelledFilePath);
       concurrencyLock.removeFile(cancelledOutputPath);
@@ -4354,16 +4407,12 @@ app.post('/api/cancel-job', (req, res) => {
       }
     }
 
-    if (targetJobId) {
-      notifyJobSubscribers(targetJobId, ssePayload);
+    if (resolvedTargetId) {
+      notifyJobSubscribers(resolvedTargetId, ssePayload);
     }
-    if (activeJob.jobId && activeJob.jobId !== targetJobId) {
+    if (activeJob.jobId && activeJob.jobId !== resolvedTargetId && isGlobalActiveTarget) {
       notifyJobSubscribers(activeJob.jobId, ssePayload);
     }
-
-    // Let the cancelled state linger briefly (so the UI can render it) then
-    // return the global state to idle.
-    scheduleActiveJobReset();
 
     res.json({
       success: true,
@@ -4381,8 +4430,8 @@ app.get(['/api/progress/:jobId', '/api/progress'], (req, res) => {
   const clientSessionId = req.query.sessionId || req.headers['x-session-id'] || null;
   const jobId = req.params.jobId || req.query.jobId || (activeJob.sessionId === clientSessionId ? activeJob.jobId : null);
 
-  // Clear any pending zombie kill timer since a client is active
-  if (zombieInactivityTimer) {
+  // Clear any pending zombie kill timer only when an authorized/matching client connects
+  if (zombieInactivityTimer && (!activeJob.sessionId || clientSessionId === activeJob.sessionId)) {
     clearTimeout(zombieInactivityTimer);
     zombieInactivityTimer = null;
   }
@@ -4628,8 +4677,8 @@ app.get('/api/jobs/:id/logs', (req, res) => {
   const jobId = req.params.id;
   const job = jobs.get(jobId) || jobManager.getJob(jobId);
   if (!job) return res.status(404).json({ error: 'Job not found' });
-  const sessionId = req.headers['x-session-id'] || req.query.sessionId;
-  if (sessionId && job.sessionId && job.sessionId !== sessionId) {
+  const sessionId = req.headers['x-session-id'] || req.query.sessionId || null;
+  if (job.sessionId && job.sessionId !== sessionId) {
     return res.status(403).json({ error: 'Unauthorized to view logs for this job' });
   }
   const persistentLogs = jobManager.getLogs(jobId);
@@ -4648,7 +4697,7 @@ app.get('/api/jobs/:id/logs', (req, res) => {
 
 // Clear Job History (Session-Isolated & Persistent)
 app.delete('/api/jobs', (req, res) => {
-  const sessionId = req.headers['x-session-id'] || req.query.sessionId;
+  const sessionId = req.headers['x-session-id'] || req.query.sessionId || null;
   if (sessionId) {
     let count = 0;
     for (const [id, job] of jobs.entries()) {
@@ -4660,17 +4709,23 @@ app.delete('/api/jobs', (req, res) => {
     jobManager.clearJobs(sessionId);
     return res.json({ success: true, message: `Cleared ${count} job(s) for your session` });
   }
-  jobs.clear();
-  jobManager.clearJobs();
-  res.json({ success: true, message: 'All job history cleared' });
+  let count = 0;
+  for (const [id, job] of jobs.entries()) {
+    if (!job.sessionId) {
+      jobs.delete(id);
+      count++;
+    }
+  }
+  jobManager.clearJobs(null, { onlyUnscoped: true });
+  res.json({ success: true, message: `Cleared ${count} unscoped job(s)` });
 });
 
 app.delete('/api/jobs/:id', (req, res) => {
   const jobId = req.params.id;
   const job = jobs.get(jobId) || jobManager.getJob(jobId);
   if (!job) return res.json({ success: false, message: 'Job not found' });
-  const sessionId = req.headers['x-session-id'] || req.query.sessionId;
-  if (sessionId && job.sessionId && job.sessionId !== sessionId) {
+  const sessionId = req.headers['x-session-id'] || req.query.sessionId || null;
+  if (job.sessionId && job.sessionId !== sessionId) {
     return res.status(403).json({ error: 'Unauthorized to delete this job' });
   }
   jobs.delete(jobId);
@@ -4678,12 +4733,43 @@ app.delete('/api/jobs/:id', (req, res) => {
   res.json({ success: true, message: 'Job log deleted' });
 });
 
+// Admin & Tunnel Access Guard for administrative/destructive routes
+function isTunneledRequest(req) {
+  const fwdHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').toLowerCase();
+  const hasProxyIp = Boolean(req.headers['cf-connecting-ip'] || req.headers['cf-ray']);
+  const isTunnelHost = /(trycloudflare\.com|loca\.lt|ngrok(-free)?\.(io|app))/i.test(fwdHost);
+  return hasProxyIp || isTunnelHost;
+}
+
+function requireAdminAccess(options = {}) {
+  const { blockPublicTunnelWithoutToken = false } = options;
+  return (req, res, next) => {
+    const adminToken = process.env.ADMIN_TOKEN;
+    if (adminToken) {
+      const authHeader = String(req.headers.authorization || '');
+      const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+      const headerToken = String(req.headers['x-admin-token'] || req.query?.adminToken || '').trim();
+      if (bearer !== adminToken && headerToken !== adminToken) {
+        return res.status(403).json({ success: false, error: 'Forbidden: Valid admin token required.' });
+      }
+      return next();
+    }
+    if (blockPublicTunnelWithoutToken && isTunneledRequest(req)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Forbidden: Destructive operation is disabled over public tunnels unless ADMIN_TOKEN is configured.'
+      });
+    }
+    return next();
+  };
+}
+
 // ==================== QUEUE MANAGEMENT API ====================
 app.get('/api/queue/status', (req, res) => {
   res.json(queueManager.getStatus());
 });
 
-app.post('/api/queue/concurrency', (req, res) => {
+app.post('/api/queue/concurrency', requireAdminAccess(), (req, res) => {
   try {
     const { limit } = req.body;
     const newLimit = queueManager.setConcurrency(limit);
@@ -4694,27 +4780,40 @@ app.post('/api/queue/concurrency', (req, res) => {
 });
 
 // ==================== HEALTH MONITORING API ====================
-app.get('/api/health', (req, res) => {
-  const summary = healthMonitor.getHealthSummary();
-  const statusCode = summary.status === 'unhealthy' ? 503 : 200;
-  res.status(statusCode).json(summary);
+app.get('/api/health', async (req, res) => {
+  try {
+    const summary = await healthMonitor.getHealthSummaryAsync();
+    const statusCode = summary.status === 'unhealthy' ? 503 : 200;
+    res.status(statusCode).json(summary);
+  } catch (err) {
+    res.status(500).json({ status: 'unhealthy', error: err.message });
+  }
 });
 
 app.get('/api/health/live', (req, res) => {
   res.json(healthMonitor.getLiveness());
 });
 
-app.get('/api/health/ready', (req, res) => {
-  const ready = healthMonitor.getReadiness();
-  res.status(ready.ready ? 200 : 503).json(ready);
+app.get('/api/health/ready', async (req, res) => {
+  try {
+    const ready = await healthMonitor.getReadinessAsync();
+    res.status(ready.ready ? 200 : 503).json(ready);
+  } catch (err) {
+    res.status(503).json({ ready: false, error: err.message });
+  }
 });
 
 // ==================== ANALYTICS API ====================
-app.get('/api/analytics/stats', (req, res) => {
-  res.json(analyticsService.getDashboardStats());
+app.get('/api/analytics/stats', async (req, res) => {
+  try {
+    const stats = await analyticsService.getDashboardStatsAsync();
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-app.post('/api/analytics/clear-errors', (req, res) => {
+app.post('/api/analytics/clear-errors', requireAdminAccess(), (req, res) => {
   try {
     const result = analyticsService.clearErrors();
     res.json({ success: true, ...result });
@@ -4724,11 +4823,11 @@ app.post('/api/analytics/clear-errors', (req, res) => {
 });
 
 // ==================== APPLICATION BACKUPS API ====================
-app.get('/api/backup/list', (req, res) => {
+app.get('/api/backup/list', requireAdminAccess(), (req, res) => {
   res.json({ backups: backupManager.getBackupsList() });
 });
 
-app.post('/api/backup/run', async (req, res) => {
+app.post('/api/backup/run', requireAdminAccess(), async (req, res) => {
   try {
     const backup = await backupManager.createBackup();
     res.json({ success: true, backup });
@@ -4737,7 +4836,7 @@ app.post('/api/backup/run', async (req, res) => {
   }
 });
 
-app.post('/api/backup/restore', async (req, res) => {
+app.post('/api/backup/restore', requireAdminAccess({ blockPublicTunnelWithoutToken: true }), async (req, res) => {
   try {
     const { backupId, confirm } = req.body;
     const result = await backupManager.restoreBackup(backupId, confirm);
@@ -4748,11 +4847,16 @@ app.post('/api/backup/restore', async (req, res) => {
 });
 
 // ==================== CENTRALIZED CLEANUP API ====================
-app.get('/api/cleanup/stats', (req, res) => {
-  res.json(cleanupManager.getStorageStats());
+app.get('/api/cleanup/stats', requireAdminAccess(), async (req, res) => {
+  try {
+    const stats = await cleanupManager.getStorageStatsAsync();
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-app.post('/api/cleanup/run', async (req, res) => {
+app.post('/api/cleanup/run', requireAdminAccess({ blockPublicTunnelWithoutToken: true }), async (req, res) => {
   try {
     const result = await cleanupManager.runCleanup({ force: Boolean(req.body?.force) });
     res.json(result);
@@ -4761,7 +4865,7 @@ app.post('/api/cleanup/run', async (req, res) => {
   }
 });
 
-app.post('/api/cleanup/retention', (req, res) => {
+app.post('/api/cleanup/retention', requireAdminAccess(), (req, res) => {
   try {
     const { minutes } = req.body;
     const retentionMs = cleanupManager.setRetention(minutes);
@@ -4876,16 +4980,44 @@ function initServices() {
 
 initServices();
 
+let activeServerInstance = null;
+
 // Graceful Shutdown
 function gracefulShutdown(signal) {
   console.log(`[Server] Received ${signal}, starting graceful shutdown...`);
   try {
     queueManager.shutdown();
+    for (const [id, proc] of activeProcesses.entries()) {
+      try {
+        if (proc && !proc.killed) proc.kill('SIGTERM');
+      } catch (e) {}
+    }
+    activeProcesses.clear();
+    currentFFmpegProcess = null;
     cleanupManager.stopScheduler();
     backupManager.stopScheduler();
     databaseManager.close();
+    wakeLockManager.forceReleaseSync();
+    if (activeServerInstance) {
+      try {
+        if (typeof activeServerInstance.closeAllConnections === 'function') {
+          activeServerInstance.closeAllConnections();
+        }
+        activeServerInstance.close(() => {
+          if (require.main === module) process.exit(0);
+        });
+        const forceExitTimer = setTimeout(() => {
+          if (require.main === module) process.exit(0);
+        }, 1500);
+        if (forceExitTimer.unref) forceExitTimer.unref();
+        return;
+      } catch (e) {}
+    }
   } catch (e) {
     console.warn('[Server] Error during graceful shutdown:', e.message);
+  }
+  if (require.main === module) {
+    process.exit(0);
   }
 }
 
@@ -4924,11 +5056,12 @@ if (require.main === module) {
   const serverInstance = app.listen(PORT, BIND_HOST, () => {
     onListen(BIND_HOST);
   });
+  activeServerInstance = serverInstance;
 
   serverInstance.on('error', (err) => {
     if (BIND_HOST === '::' && (err.code === 'EAFNOSUPPORT' || err.code === 'EADDRNOTAVAIL')) {
       console.warn('[Server] Dual-stack :: bind unavailable, falling back to 0.0.0.0...');
-      app.listen(PORT, '0.0.0.0', () => {
+      activeServerInstance = app.listen(PORT, '0.0.0.0', () => {
         onListen('0.0.0.0');
       });
     } else {

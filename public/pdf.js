@@ -599,9 +599,11 @@
         shell.body.appendChild(localNotice);
       }
 
+      const firstExt = data.files[0] && /\.png$/i.test(data.files[0].name || data.files[0].path || '') ? 'PNG' : 'JPG';
+      const imgLabel = (data.format && String(data.format).toUpperCase()) || firstExt;
       const note = document.createElement('p');
       note.className = 'pdf-result-note';
-      note.textContent = `${data.files.length} JPG file${data.files.length === 1 ? '' : 's'} created. Tap a preview to open it, or save it directly.`;
+      note.textContent = `${data.files.length} ${imgLabel} file${data.files.length === 1 ? '' : 's'} created. Tap a preview to open it, or save it directly.`;
       shell.body.appendChild(note);
 
       const grid = document.createElement('div');

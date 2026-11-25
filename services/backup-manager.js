@@ -184,6 +184,9 @@ class BackupManager {
     if (!confirm) {
       throw new Error('Explicit confirmation is required to restore a backup (set confirm: true)');
     }
+    if (this._restoreInProgress) {
+      throw new Error('A database restore is already in progress');
+    }
 
     const backup = this.db.getBackupById(backupId);
     if (!backup) {
@@ -215,8 +218,10 @@ class BackupManager {
       console.warn('[BackupManager] Could not create pre-restore snapshot:', e.message);
     }
 
-    // 4. Safely swap database
+    // 4. Safely swap database under restore guard so background callers cannot re-open DB mid-copy
+    this._restoreInProgress = true;
     const activeDbPath = this.db.dbPath;
+    this.db._restoring = true;
     this.db.close();
 
     try {
@@ -230,6 +235,7 @@ class BackupManager {
       fs.copyFileSync(backup.filepath, activeDbPath);
 
       // Re-initialize database
+      this.db._restoring = false;
       this.db.init();
 
       console.log(`[BackupManager] Database successfully restored from ${backup.filename}`);
@@ -243,10 +249,14 @@ class BackupManager {
       if (fs.existsSync(safetySnapshotPath)) {
         try {
           fs.copyFileSync(safetySnapshotPath, activeDbPath);
+          this.db._restoring = false;
           this.db.init();
         } catch (e) {}
       }
       throw restoreErr;
+    } finally {
+      this.db._restoring = false;
+      this._restoreInProgress = false;
     }
   }
 }

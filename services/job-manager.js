@@ -67,6 +67,7 @@ class JobManager extends EventEmitter {
       jobId: id,
       sessionId: jobData.sessionId || null,
       name: jobData.name || `Job ${id}`,
+      filename: jobData.filename || (jobData.filePath ? path.basename(jobData.filePath) : ''),
       type: jobData.type || 'media',
       operation: jobData.operation || 'process',
       status: jobData.status || 'queued',
@@ -80,7 +81,8 @@ class JobManager extends EventEmitter {
       },
       currentTime: '00:00:00',
       totalDuration: jobData.totalDuration || '00:00:00',
-      totalDurationSec: jobData.totalDurationSec || 0,
+      totalDurationSec: jobData.totalDurationSec || jobData.expectedDuration || 0,
+      expectedDuration: jobData.expectedDuration || jobData.totalDurationSec || 0,
       speed: '0x',
       filePath: jobData.filePath || (Array.isArray(jobData.inputPaths) ? jobData.inputPaths[0] : ''),
       inputPaths: Array.isArray(jobData.inputPaths) ? jobData.inputPaths : (jobData.filePath ? [jobData.filePath] : []),
@@ -97,6 +99,8 @@ class JobManager extends EventEmitter {
       durationMs: null,
       isRemoteUpload: Boolean(jobData.isRemoteUpload),
       isDirectPath: true,
+      isCustom: Boolean(jobData.isCustom),
+      isHardwareAccel: Boolean(jobData.isHardwareAccel),
       logs: [],
       stderr: '',
       executable: jobData.executable || 'ffmpeg',
@@ -128,15 +132,18 @@ class JobManager extends EventEmitter {
     const job = this.getJob(id);
     if (!job) return null;
 
-    Object.assign(job, updates);
+    const { progress, ...rest } = updates || {};
+    Object.assign(job, rest);
 
-    // Synchronize progress object
-    if (typeof updates.progress === 'number') {
+    // Synchronize progress object without clobbering existing fields
+    if (typeof progress === 'number') {
       if (!job.progress || typeof job.progress !== 'object') {
-        job.progress = { percent: updates.progress };
+        job.progress = { percent: progress };
       } else {
-        job.progress.percent = updates.progress;
+        job.progress.percent = progress;
       }
+    } else if (progress && typeof progress === 'object') {
+      job.progress = { ...(typeof job.progress === 'object' ? job.progress : {}), ...progress };
     }
 
     if (updates.currentTime) {
@@ -182,7 +189,7 @@ class JobManager extends EventEmitter {
   deleteJob(id, sessionId = null) {
     const job = this.getJob(id);
     if (!job) return false;
-    if (sessionId && job.sessionId && job.sessionId !== sessionId) {
+    if (job.sessionId && job.sessionId !== sessionId) {
       const err = new Error('Unauthorized');
       err.status = 403;
       throw err;
@@ -194,7 +201,7 @@ class JobManager extends EventEmitter {
     return true;
   }
 
-  clearJobs(sessionId = null) {
+  clearJobs(sessionId = null, options = {}) {
     if (sessionId) {
       for (const [id, job] of this.memoryJobs.entries()) {
         if (job.sessionId === sessionId) {
@@ -202,6 +209,14 @@ class JobManager extends EventEmitter {
         }
       }
       return this.db.clearJobs(sessionId);
+    }
+    if (options.onlyUnscoped) {
+      for (const [id, job] of this.memoryJobs.entries()) {
+        if (!job.sessionId) {
+          this.memoryJobs.delete(id);
+        }
+      }
+      return this.db.clearJobs(null, { onlyUnscoped: true });
     }
     this.memoryJobs.clear();
     return this.db.clearJobs();

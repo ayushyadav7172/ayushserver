@@ -1,7 +1,9 @@
 'use strict';
 
 const os = require('os');
-const { execSync } = require('child_process');
+const { execFile, execSync } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 const { databaseManager } = require('../database/database');
 const { queueManager } = require('./queue-manager');
 const { cleanupManager } = require('./cleanup-manager');
@@ -53,6 +55,25 @@ class HealthMonitor {
     } catch (e) {
       return { status: 'down', error: e.message };
     }
+  }
+
+  async checkFFmpegAsync() {
+    const now = Date.now();
+    if (this._cachedFfmpeg && (now - this._ffmpegCheckTime < 60000)) {
+      return this._cachedFfmpeg;
+    }
+
+    try {
+      const { stdout } = await execFileAsync('ffmpeg', ['-version'], { timeout: 3000 });
+      const firstLine = String(stdout || '').split('\n')[0] || '';
+      const versionMatch = firstLine.match(/ffmpeg version\s+([^\s]+)/i);
+      const version = versionMatch ? versionMatch[1] : 'installed';
+      this._cachedFfmpeg = { status: 'available', version };
+    } catch (e) {
+      this._cachedFfmpeg = { status: 'unavailable', error: 'ffmpeg command not found or failed' };
+    }
+    this._ffmpegCheckTime = now;
+    return this._cachedFfmpeg;
   }
 
   checkFFmpeg() {
@@ -176,6 +197,96 @@ class HealthMonitor {
     return {
       status: 'ok',
       uptime: this.getUptimeSeconds()
+    };
+  }
+
+  async getSystemWarningsAsync(storageStatsOverride = null, ffmpegStatusOverride = null) {
+    const warnings = [];
+    const mem = process.memoryUsage();
+    if (mem.rss > MEMORY_WARNING_THRESHOLD_BYTES) {
+      warnings.push(`Process memory usage is high (${this.formatBytes(mem.rss)})`);
+    }
+
+    const storageStats = storageStatsOverride || await this.cleanup.getStorageStatsAsync();
+    if (storageStats.diskStorage && storageStats.diskStorage.freeBytes > 0 && storageStats.diskStorage.freeBytes < DISK_LOW_THRESHOLD_BYTES) {
+      warnings.push(`Low disk space warning: only ${storageStats.diskStorage.freeFormatted} available`);
+    }
+
+    const qStatus = this.queue.getStatus();
+    if (qStatus.queuedCount > 20) {
+      warnings.push(`Queue backlog is high (${qStatus.queuedCount} jobs queued)`);
+    }
+
+    const ffmpegStatus = ffmpegStatusOverride || await this.checkFFmpegAsync();
+    if (ffmpegStatus.status !== 'available') {
+      warnings.push('FFmpeg binary is unavailable');
+    }
+
+    const dbStatus = this.checkDatabase();
+    if (dbStatus.status !== 'healthy') {
+      warnings.push(`Database issue: ${dbStatus.error || dbStatus.status}`);
+    }
+
+    return warnings;
+  }
+
+  async getHealthSummaryAsync() {
+    const uptimeSec = this.getUptimeSeconds();
+    const dbStatus = this.checkDatabase();
+    const [ffmpegStatus, storage] = await Promise.all([
+      this.checkFFmpegAsync(),
+      this.cleanup.getStorageStatsAsync()
+    ]);
+    const memory = this.getMemoryInfo();
+    const queue = this.queue.getStatus();
+    const warnings = await this.getSystemWarningsAsync(storage, ffmpegStatus);
+
+    const isHealthy = dbStatus.status === 'healthy' && ffmpegStatus.status === 'available' && warnings.length === 0;
+
+    return {
+      status: isHealthy ? 'healthy' : (warnings.length > 0 && dbStatus.status === 'healthy' ? 'degraded' : 'unhealthy'),
+      uptime: {
+        seconds: uptimeSec,
+        formatted: this.formatDuration(uptimeSec)
+      },
+      timestamp: Date.now(),
+      platform: {
+        os: process.platform,
+        arch: process.arch,
+        nodeVersion: process.version,
+        isTermux: Boolean(process.env.TERMUX_VERSION || process.env.PREFIX?.includes('com.termux'))
+      },
+      database: dbStatus,
+      ffmpeg: ffmpegStatus,
+      memory,
+      queue: {
+        active: queue.activeCount,
+        queued: queue.queuedCount,
+        maxConcurrency: queue.maxConcurrency
+      },
+      storage: {
+        totalAppUsage: storage.totalAppStorage.formatted,
+        diskFree: storage.diskStorage.freeFormatted,
+        diskTotal: storage.diskStorage.totalFormatted
+      },
+      warnings
+    };
+  }
+
+  async getReadinessAsync() {
+    const dbStatus = this.checkDatabase();
+    const [ffmpegStatus, storage] = await Promise.all([
+      this.checkFFmpegAsync(),
+      this.cleanup.getStorageStatsAsync()
+    ]);
+
+    const isReady = dbStatus.status === 'healthy' && ffmpegStatus.status === 'available';
+
+    return {
+      ready: isReady,
+      database: dbStatus.status,
+      ffmpeg: ffmpegStatus.status,
+      diskFree: storage.diskStorage.freeFormatted
     };
   }
 

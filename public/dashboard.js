@@ -193,6 +193,16 @@
     });
   }
 
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/'/g, '&#39;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
   function formatDuration(sec) {
     const s = Math.floor(sec % 60);
     const m = Math.floor((sec / 60) % 60);
@@ -362,9 +372,9 @@
           }
           return `
             <div class="error-item">
-              <div><strong>${err.name || 'Job issue'}</strong> (${err.operation || 'process'}):</div>
-              <div style="color:var(--dash-danger); margin-top:2px;">${err.error || 'Interrupted or failed'}</div>
-              <div style="color:var(--dash-muted); font-size:11px; margin-top:2px;">${timeDisplay}</div>
+              <div><strong>${escapeHtml(err.name || 'Job issue')}</strong> (${escapeHtml(err.operation || 'process')}):</div>
+              <div style="color:var(--dash-danger); margin-top:2px;">${escapeHtml(err.error || 'Interrupted or failed')}</div>
+              <div style="color:var(--dash-muted); font-size:11px; margin-top:2px;">${escapeHtml(timeDisplay)}</div>
             </div>
           `;
         }).join('');

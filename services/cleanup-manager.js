@@ -3,7 +3,9 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execFile, execSync } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 const { databaseManager } = require('../database/database');
 
 const DEFAULT_CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
@@ -179,7 +181,9 @@ class CleanupManager {
         stats.deleted++;
         stats.bytesFreed += size;
       } catch (err) {
-        stats.errors.push(`Failed to delete ${fullPath}: ${err.message}`);
+        if (err && err.code !== 'ENOENT') {
+          stats.errors.push(`Failed to delete ${fullPath}: ${err.message}`);
+        }
       }
     }
 
@@ -234,6 +238,98 @@ class CleanupManager {
       }
     } catch (e) {}
     return total;
+  }
+
+  async getDirectorySizeAsync(dirPath) {
+    try {
+      const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      let total = 0;
+      for (const f of files) {
+        const full = path.join(dirPath, f.name);
+        try {
+          if (f.isDirectory()) {
+            total += await this.getDirectorySizeAsync(full);
+          } else {
+            const stat = await fs.promises.stat(full);
+            total += stat.size || 0;
+          }
+        } catch (e) {}
+      }
+      return total;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  async getStorageStatsAsync() {
+    const [
+      tempUploadsSize,
+      tempPdfUploadsSize,
+      tempThumbsSize,
+      processedSize,
+      pdfOutputsSize,
+      diskInfo
+    ] = await Promise.all([
+      this.getDirectorySizeAsync(this.tempUploadsDir),
+      this.getDirectorySizeAsync(this.tempPdfUploadsDir),
+      this.getDirectorySizeAsync(this.tempThumbsDir),
+      this.getDirectorySizeAsync(this.processedDir),
+      this.getDirectorySizeAsync(this.pdfOutputsDir),
+      (async () => {
+        try {
+          const { stdout } = await execFileAsync('df', ['-k', this.rootDir], { timeout: 3000 });
+          const lines = String(stdout || '').trim().split('\n');
+          if (lines.length >= 2) {
+            const parts = lines[1].trim().split(/\s+/);
+            if (parts.length >= 4) {
+              return {
+                totalDiskBytes: parseInt(parts[1], 10) * 1024,
+                freeDiskBytes: parseInt(parts[3], 10) * 1024
+              };
+            }
+          }
+        } catch (e) {}
+        return { totalDiskBytes: 0, freeDiskBytes: 0 };
+      })()
+    ]);
+
+    const { totalDiskBytes, freeDiskBytes } = diskInfo;
+    const totalAppUsage = tempUploadsSize + tempPdfUploadsSize + tempThumbsSize + processedSize + pdfOutputsSize;
+
+    return {
+      tempUploads: {
+        bytes: tempUploadsSize,
+        formatted: this.formatBytes(tempUploadsSize)
+      },
+      tempPdfUploads: {
+        bytes: tempPdfUploadsSize,
+        formatted: this.formatBytes(tempPdfUploadsSize)
+      },
+      tempThumbs: {
+        bytes: tempThumbsSize,
+        formatted: this.formatBytes(tempThumbsSize)
+      },
+      processed: {
+        bytes: processedSize,
+        formatted: this.formatBytes(processedSize)
+      },
+      pdfOutputs: {
+        bytes: pdfOutputsSize,
+        formatted: this.formatBytes(pdfOutputsSize)
+      },
+      totalAppStorage: {
+        bytes: totalAppUsage,
+        formatted: this.formatBytes(totalAppUsage)
+      },
+      diskStorage: {
+        totalBytes: totalDiskBytes,
+        totalFormatted: this.formatBytes(totalDiskBytes),
+        freeBytes: freeDiskBytes,
+        freeFormatted: this.formatBytes(freeDiskBytes)
+      },
+      lastCleanup: this.lastCleanupResult,
+      retentionMinutes: Math.round(this.retentionMs / 60000)
+    };
   }
 
   getStorageStats() {

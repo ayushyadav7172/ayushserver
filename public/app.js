@@ -556,7 +556,7 @@ function setupStorageModeAndUpload() {
           showToast(`File uploaded successfully: ${file.name}`, 'success');
           const uploadedFile = data.file || (data.files && data.files[0]);
           if (uploadedFile) {
-            mediaUploadCountdownTimer.start(uploadedFile.expiresAt, 'File will be deleted in');
+            initMediaUploadTimer().start(uploadedFile.expiresAt, 'File will be deleted in');
             // Analyze the uploaded file and transition to Step 2 Configure
             await selectMediaFile(uploadedFile.path);
           }
@@ -958,10 +958,14 @@ function setupNavigation() {
         btnCancelJob.disabled = true;
         btnCancelJob.innerHTML = '<span>Stopping...</span>';
 
+        const sessionId = getOrCreateSessionId();
         const res = await fetch('/api/cancel-job', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId: currentJobId })
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Session-ID': sessionId
+          },
+          body: JSON.stringify({ jobId: currentJobId, sessionId })
         });
         const data = await readApiPayload(res);
         if (!res.ok || !data.success) {
@@ -1741,7 +1745,7 @@ function updateOperationsSummary() {
   const selectedFormat = opFormatSelect ? opFormatSelect.value.toUpperCase() : 'MP4';
   // Audio-only containers (MP3/WAV/...) cannot hold a video stream, so
   // selecting one behaves exactly like "Extract audio only".
-  const isAudioContainerFormat = isFormat && ['MP3', 'WAV', 'AAC', 'FLAC', 'OGG', 'M4A'].includes(selectedFormat);
+  const isAudioContainerFormat = isFormat && ['MP3', 'WAV', 'AAC', 'FLAC', 'OGG', 'M4A', 'OPUS'].includes(selectedFormat);
   const isAudioOnly = isAudioOnlyChecked || isAudioContainerFormat;
 
   // Subtitles
@@ -2031,7 +2035,7 @@ function gatherOperationsPayload() {
   const isTrim = Boolean(opCheckTrim && opCheckTrim.checked);
   const selectedFormat = opFormatSelect ? opFormatSelect.value.toLowerCase() : 'mp4';
   // Mirror the server rule: an audio-only container implies audio-only output.
-  const isAudioContainerFormat = isFormat && ['mp3', 'wav', 'aac', 'flac', 'ogg', 'm4a'].includes(selectedFormat);
+  const isAudioContainerFormat = isFormat && ['mp3', 'wav', 'aac', 'flac', 'ogg', 'm4a', 'opus'].includes(selectedFormat);
   const isAudioOnly = isAudioOnlyChecked || isAudioContainerFormat;
   const isLossless = Boolean(isFormat && opCheckLossless && opCheckLossless.checked && !isBurnSub && !isAudioOnly);
 
@@ -2594,7 +2598,7 @@ function gatherOperationOptions(operation) {
       options.keepAspect = document.getElementById('resizeKeepAspect') ? document.getElementById('resizeKeepAspect').checked : true;
       break;
     case 'rotate':
-      options.action = document.getElementById('rotateAction')?.value || '90_cw';
+      options.action = document.getElementById('rotateAction')?.value || 'cw90';
       break;
     case 'gif':
       options.fps = document.getElementById('gifFps')?.value || '15';
@@ -2691,7 +2695,8 @@ function listenJobProgress(jobId) {
   stopPollingFallback();
 
   const targetJobId = jobId || currentJobId;
-  const sseUrl = targetJobId ? `/api/progress/${targetJobId}` : '/api/progress';
+  const sidParam = `sessionId=${encodeURIComponent(getOrCreateSessionId())}`;
+  const sseUrl = targetJobId ? `/api/progress/${targetJobId}?${sidParam}` : `/api/progress?${sidParam}`;
 
   try {
     eventSource = new EventSource(sseUrl);
@@ -3039,7 +3044,7 @@ window.openLogModal = async function(jobId, commandStr = '', defaultStderr = '')
 
   if (jobId) {
     try {
-      const sid = isRemoteModeActive() ? getOrCreateSessionId() : '';
+      const sid = getOrCreateSessionId();
       const url = `/api/jobs/${jobId}/logs` + (sid ? `?sessionId=${encodeURIComponent(sid)}` : '');
       const headers = sid ? { 'X-Session-ID': sid } : {};
       const res = await fetch(url, { headers });

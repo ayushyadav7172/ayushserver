@@ -183,16 +183,10 @@ class WakeLockManager {
   }
 
   /**
-   * Register system signal and exit handlers for automatic cleanup on shutdown.
+   * Register exit handler for automatic wake-lock cleanup without preempting
+   * server signal handlers (server.js calls forceReleaseSync during gracefulShutdown).
    */
   _setupProcessCleanup() {
-    const onSignal = () => {
-      this.forceReleaseSync();
-      process.exit(0);
-    };
-
-    process.once('SIGINT', onSignal);
-    process.once('SIGTERM', onSignal);
     process.once('exit', () => {
       this.forceReleaseSync();
     });

@@ -12,9 +12,19 @@ class DatabaseManager {
     this.dbPath = dbPath;
     this.db = null;
     this._initialized = false;
+    this._restoring = false;
+  }
+
+  _assertNotRestoring() {
+    if (this._restoring) {
+      const err = new Error('Database restore is currently in progress. Please retry momentarily.');
+      err.status = 503;
+      throw err;
+    }
   }
 
   init() {
+    this._assertNotRestoring();
     if (this._initialized && this.db) {
       return this;
     }
@@ -246,10 +256,17 @@ class DatabaseManager {
     return true;
   }
 
-  clearJobs(sessionId = null) {
+  clearJobs(sessionId = null, options = {}) {
     if (!this.db) this.init();
     if (sessionId) {
       const rows = this.db.prepare('SELECT id FROM jobs WHERE session_id = ?').all(sessionId);
+      for (const row of rows) {
+        this.deleteJob(row.id);
+      }
+      return rows.length;
+    }
+    if (options.onlyUnscoped) {
+      const rows = this.db.prepare('SELECT id FROM jobs WHERE session_id IS NULL').all();
       for (const row of rows) {
         this.deleteJob(row.id);
       }

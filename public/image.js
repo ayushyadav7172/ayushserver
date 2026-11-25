@@ -1618,7 +1618,7 @@
           if (xhr.status >= 200 && xhr.status < 300 && data.success) {
             showToast(`Uploaded ${data.files.length} image${data.files.length === 1 ? '' : 's'}.`, 'success');
             if (data.files && data.files[0] && data.files[0].expiresAt) {
-              imageUploadCountdownTimer.start(data.files[0].expiresAt, 'Files will be deleted in');
+              ensureImageUploadTimer().start(data.files[0].expiresAt, 'Files will be deleted in');
             }
             const newPaths = data.files.map(f => f.path);
             let addedCount = 0;
