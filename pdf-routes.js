@@ -1591,7 +1591,15 @@ function createPdfRouter(deps) {
     const message = (status < 500 || err.expose)
       ? (err.message || 'PDF operation failed.')
       : 'PDF operation failed due to an internal server error.';
-    res.status(status).json({ success: false, error: message });
+    const responsePayload = { success: false, error: message };
+    if (err.busy) {
+      responsePayload.busy = true;
+      responsePayload.activeType = err.activeType || 'unknown';
+      responsePayload.activeJobName = err.activeJobName || '';
+      responsePayload.queuePosition = err.queuePosition || 1;
+      responsePayload.queuedJobsCount = err.queuedJobsCount || 0;
+    }
+    res.status(status).json(responsePayload);
   });
 
   return router;

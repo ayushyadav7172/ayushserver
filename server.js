@@ -500,10 +500,18 @@ function formatJobForClient(job) {
   const speed = job.speed || (job.progress && job.progress.speed) || 'N/A';
   const totalDuration = job.totalDuration || (job.expectedDuration ? formatTime(job.expectedDuration) : '00:00:00');
 
+  let queuePosition = 0;
+  if (job.status === 'queued' && queueManager && Array.isArray(queueManager.queue)) {
+    const idx = queueManager.queue.findIndex(q => q.id === (job.id || job.jobId));
+    if (idx !== -1) queuePosition = idx + 1;
+    else queuePosition = queueManager.queue.length || 1;
+  }
+
   return {
     jobId: job.id || job.jobId || null,
     sessionId: job.sessionId || null,
     status: job.status || 'idle',
+    queuePosition,
     filePath: job.filePath || (job.inputPaths && job.inputPaths[0]) || '',
     filename: job.filename || (job.filePath ? path.basename(job.filePath) : ''),
     operation: job.operation || '',
@@ -581,8 +589,15 @@ const concurrencyLock = {
   },
   acquirePdfLock(toolName) {
     if (this.isMediaProcessing()) {
+      const activeName = (activeJob && activeJob.filename) || (queueManager?.activeJobs ? Array.from(queueManager.activeJobs.values())[0]?.filename : '') || 'Video/Audio encoding';
+      const qLen = queueManager?.queue?.length || 0;
       const err = new Error('A media conversion process is currently running. Please wait for it to finish or cancel it.');
       err.status = 409;
+      err.busy = true;
+      err.activeType = 'media';
+      err.activeJobName = activeName;
+      err.queuePosition = qLen + 1;
+      err.queuedJobsCount = qLen;
       throw err;
     }
     if (this.imageJob.isProcessing) {
@@ -592,6 +607,11 @@ const concurrencyLock = {
       } else {
         const err = new Error(`An image operation (${this.imageJob.operation}) is currently running. Please wait for it to finish.`);
         err.status = 409;
+        err.busy = true;
+        err.activeType = 'image';
+        err.activeJobName = this.imageJob.operation || 'Image processing';
+        err.queuePosition = 1;
+        err.queuedJobsCount = 0;
         throw err;
       }
     }
@@ -602,6 +622,11 @@ const concurrencyLock = {
       } else {
         const err = new Error(`Another PDF operation (${this.pdfJob.tool}) is currently running. Please wait for it to finish.`);
         err.status = 409;
+        err.busy = true;
+        err.activeType = 'pdf';
+        err.activeJobName = this.pdfJob.tool || 'PDF Studio';
+        err.queuePosition = 1;
+        err.queuedJobsCount = 0;
         throw err;
       }
     }
@@ -613,8 +638,15 @@ const concurrencyLock = {
   },
   acquireImageLock(operationName) {
     if (this.isMediaProcessing()) {
+      const activeName = (activeJob && activeJob.filename) || (queueManager?.activeJobs ? Array.from(queueManager.activeJobs.values())[0]?.filename : '') || 'Video/Audio encoding';
+      const qLen = queueManager?.queue?.length || 0;
       const err = new Error('A media conversion process is currently running. Please wait for it to finish or cancel it.');
       err.status = 409;
+      err.busy = true;
+      err.activeType = 'media';
+      err.activeJobName = activeName;
+      err.queuePosition = qLen + 1;
+      err.queuedJobsCount = qLen;
       throw err;
     }
     if (this.pdfJob.isProcessing) {
@@ -624,6 +656,11 @@ const concurrencyLock = {
       } else {
         const err = new Error(`A PDF operation (${this.pdfJob.tool}) is currently running. Please wait for it to finish.`);
         err.status = 409;
+        err.busy = true;
+        err.activeType = 'pdf';
+        err.activeJobName = this.pdfJob.tool || 'PDF Studio';
+        err.queuePosition = 1;
+        err.queuedJobsCount = 0;
         throw err;
       }
     }
@@ -634,6 +671,11 @@ const concurrencyLock = {
       } else {
         const err = new Error('Another image operation is currently running. Please wait for it to finish.');
         err.status = 409;
+        err.busy = true;
+        err.activeType = 'image';
+        err.activeJobName = this.imageJob.operation || 'Image processing';
+        err.queuePosition = 1;
+        err.queuedJobsCount = 0;
         throw err;
       }
     }
@@ -4782,7 +4824,22 @@ function requireAdminAccess(options = {}) {
 
 // ==================== QUEUE MANAGEMENT API ====================
 app.get('/api/queue/status', (req, res) => {
-  res.json(queueManager.getStatus());
+  const qStatus = queueManager.getStatus();
+  const isImageActive = Boolean(concurrencyLock?.imageJob?.isProcessing);
+  const isPdfActive = Boolean(concurrencyLock?.pdfJob?.isProcessing);
+  const isMediaActive = Boolean(concurrencyLock?.isMediaProcessing());
+  const activeMediaName = (activeJob && activeJob.filename) || (qStatus.activeJobs ? qStatus.activeJobs[0]?.filename : null);
+
+  res.json({
+    ...qStatus,
+    locks: {
+      media: isMediaActive,
+      image: isImageActive,
+      pdf: isPdfActive
+    },
+    activeJobInfo: activeMediaName || (isImageActive ? `Image (${concurrencyLock.imageJob.operation})` : (isPdfActive ? `PDF (${concurrencyLock.pdfJob.tool})` : null)),
+    isIdle: !isMediaActive && !isImageActive && !isPdfActive
+  });
 });
 
 app.post('/api/queue/concurrency', requireAdminAccess(), (req, res) => {
@@ -4916,10 +4973,18 @@ app.use((err, req, res, next) => {
     const clientMessage = (status < 500 || err.expose)
       ? (err.message || 'Request failed.')
       : 'An unexpected internal server error occurred.';
-    return res.status(status).json({
+    const responsePayload = {
       success: false,
       error: clientMessage
-    });
+    };
+    if (err.busy) {
+      responsePayload.busy = true;
+      responsePayload.activeType = err.activeType || 'unknown';
+      responsePayload.activeJobName = err.activeJobName || '';
+      responsePayload.queuePosition = err.queuePosition || 1;
+      responsePayload.queuedJobsCount = err.queuedJobsCount || 0;
+    }
+    return res.status(status).json(responsePayload);
   }
   return res.status(status).send(status < 500 ? (err.message || 'Request failed.') : 'Request failed.');
 });

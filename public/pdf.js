@@ -115,7 +115,11 @@
     }
 
     if (!response.ok || data.success === false) {
-      throw new Error(data.error || `Request failed (${response.status})`);
+      const err = new Error(data.error || `Request failed (${response.status})`);
+      err.status = response.status;
+      err.busy = Boolean(data.busy || response.status === 409);
+      err.data = data;
+      throw err;
     }
 
     return data;
@@ -1177,26 +1181,169 @@
     } catch (err) {}
   }
 
+  let pdfQueuePollTimer = null;
+
+  function renderPdfQueueResult(container, queueInfo, onCancel) {
+    if (!container) return;
+    const shell = resultShell(container, { badge: 'In Queue', meta: 'Waiting for active tasks to complete' });
+    const status = document.createElement('div');
+    status.style.display = 'flex';
+    status.style.flexDirection = 'column';
+    status.style.alignItems = 'flex-start';
+    status.style.gap = '10px';
+    status.style.padding = '14px 16px';
+
+    const rowTop = document.createElement('div');
+    rowTop.style.display = 'flex';
+    rowTop.style.alignItems = 'center';
+    rowTop.style.gap = '10px';
+
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    const label = document.createElement('strong');
+    label.id = 'pdfQueueTitle';
+    const pos = queueInfo.queuePosition || 1;
+    label.textContent = `Aapki file Queue me hai (Aage ${pos} file baaki hai)`;
+    rowTop.append(spinner, label);
+
+    const desc = document.createElement('div');
+    desc.id = 'pdfQueueDesc';
+    desc.style.fontSize = '13px';
+    desc.style.color = 'var(--text-muted, #94a3b8)';
+    desc.textContent = `Server abhi ${queueInfo.activeJobName || 'doosra task'} process kar raha hai. Jaise hi complete hoga, automatically start hoga!`;
+
+    const countdownRow = document.createElement('div');
+    countdownRow.style.display = 'flex';
+    countdownRow.style.alignItems = 'center';
+    countdownRow.style.gap = '12px';
+    countdownRow.style.fontSize = '12px';
+
+    const cdText = document.createElement('span');
+    cdText.id = 'pdfQueueCountdown';
+    cdText.style.color = 'var(--accent, #38bdf8)';
+    cdText.textContent = 'Live checking status in 3s...';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-ghost btn-sm';
+    cancelBtn.style.padding = '4px 10px';
+    cancelBtn.style.fontSize = '12px';
+    cancelBtn.style.color = '#ef4444';
+    cancelBtn.textContent = 'Cancel Queue';
+    cancelBtn.onclick = onCancel;
+
+    countdownRow.append(cdText, cancelBtn);
+    status.append(rowTop, desc, countdownRow);
+    shell.body.appendChild(status);
+  }
+
+  async function runPdfActionWithQueue(result, button, busyLabel, executeFn) {
+    try {
+      hideResult(result);
+      setBusy(button, true, busyLabel);
+      await executeFn();
+    } catch (err) {
+      if (err.busy) {
+        startPdfAutoQueue(result, button, busyLabel, err.data || {}, executeFn);
+        return;
+      }
+      renderError(result, err.message);
+      showToast(err.message, 'error');
+      setBusy(button, false);
+    }
+  }
+
+  function startPdfAutoQueue(result, button, busyLabel, busyData, executeFn) {
+    if (pdfQueuePollTimer) clearInterval(pdfQueuePollTimer);
+    let secondsLeft = 3;
+    let cancelled = false;
+
+    setBusy(button, true, 'In Queue…');
+
+    const stopQueue = () => {
+      cancelled = true;
+      if (pdfQueuePollTimer) {
+        clearInterval(pdfQueuePollTimer);
+        pdfQueuePollTimer = null;
+      }
+      setBusy(button, false);
+      showToast('Queue wait cancelled.', 'warning');
+      renderError(result, 'Queue wait cancelled by user.');
+    };
+
+    renderPdfQueueResult(result, {
+      queuePosition: busyData.queuePosition || 1,
+      activeJobName: busyData.activeJobName || 'video task'
+    }, stopQueue);
+
+    pdfQueuePollTimer = setInterval(async () => {
+      if (cancelled) return;
+      secondsLeft--;
+      const cdEl = $('pdfQueueCountdown');
+      if (cdEl) cdEl.textContent = `Live checking in ${secondsLeft}s...`;
+
+      if (secondsLeft <= 0) {
+        secondsLeft = 3;
+        try {
+          const res = await fetch('/api/queue/status');
+          if (!res.ok) return;
+          const qStatus = await res.json();
+          if (cancelled) return;
+
+          if (qStatus.isIdle) {
+            if (pdfQueuePollTimer) {
+              clearInterval(pdfQueuePollTimer);
+              pdfQueuePollTimer = null;
+            }
+            showToast('Aapka number aa gaya! Starting PDF operation...', 'success');
+            setBusy(button, true, busyLabel);
+
+            try {
+              await executeFn();
+            } catch (execErr) {
+              if (execErr.busy) {
+                startPdfAutoQueue(result, button, busyLabel, execErr.data || {}, executeFn);
+                return;
+              }
+              renderError(result, execErr.message);
+              showToast(execErr.message, 'error');
+            } finally {
+              setBusy(button, false);
+            }
+          } else {
+            const titleEl = $('pdfQueueTitle');
+            const descEl = $('pdfQueueDesc');
+            const pos = (qStatus.queuedCount || 0) + (qStatus.locks?.media ? 1 : 0);
+            if (titleEl) titleEl.textContent = `Aapki file Queue me hai (Aage ${pos || 1} file baaki hai)`;
+            if (descEl && qStatus.activeJobInfo) descEl.textContent = `Server abhi ${qStatus.activeJobInfo} process kar raha hai. Jaise hi complete hoga, automatically start hoga!`;
+          }
+        } catch (pollErr) {
+          console.warn('[PDF Queue Poll] error:', pollErr.message);
+        }
+      }
+    }, 1000);
+  }
+
   async function runUnlock() {
     const button = $('btnUnlockRun');
     const result = $('unlockResult');
     try {
       const inputPath = readSinglePath('unlockPath', 'pdf', 'PDF file');
-      hideResult(result);
-      setBusy(button, true, 'Removing password…');
-      const data = await postJson('/api/pdf/unlock', {
-        inputPath,
-        password: $('unlockPassword').value,
-        outputDir: $('unlockOutDir').value.trim(),
-        isRemoteUpload: isPdfRemoteMode()
+      await runPdfActionWithQueue(result, button, 'Removing password…', async () => {
+        const data = await postJson('/api/pdf/unlock', {
+          inputPath,
+          password: $('unlockPassword').value,
+          outputDir: $('unlockOutDir').value.trim(),
+          isRemoteUpload: isPdfRemoteMode()
+        });
+        renderResult(result, data);
+        savePdfLastResult(result.id, data);
+        showToast(data.message || 'Password removed.', 'success');
+        setBusy(button, false);
       });
-      renderResult(result, data);
-      savePdfLastResult(result.id, data);
-      showToast(data.message || 'Password removed.', 'success');
     } catch (err) {
       renderError(result, err.message);
       showToast(err.message, 'error');
-    } finally {
       setBusy(button, false);
     }
   }
@@ -1208,20 +1355,20 @@
       if (mergePaths.length < 2) {
         throw new Error('Add at least two PDF files to merge.');
       }
-      hideResult(result);
-      setBusy(button, true, 'Merging…');
-      const data = await postJson('/api/pdf/merge', {
-        inputPaths: mergePaths.slice(),
-        outputDir: $('mergeOutDir').value.trim(),
-        isRemoteUpload: isPdfRemoteMode()
+      await runPdfActionWithQueue(result, button, 'Merging…', async () => {
+        const data = await postJson('/api/pdf/merge', {
+          inputPaths: mergePaths.slice(),
+          outputDir: $('mergeOutDir').value.trim(),
+          isRemoteUpload: isPdfRemoteMode()
+        });
+        renderResult(result, data);
+        savePdfLastResult(result.id, data);
+        showToast(data.message || 'PDFs merged.', 'success');
+        setBusy(button, false);
       });
-      renderResult(result, data);
-      savePdfLastResult(result.id, data);
-      showToast(data.message || 'PDFs merged.', 'success');
     } catch (err) {
       renderError(result, err.message);
       showToast(err.message, 'error');
-    } finally {
       setBusy(button, false);
     }
   }
@@ -1231,21 +1378,21 @@
     const result = $('compressResult');
     try {
       const inputPath = readSinglePath('compressPath', 'pdf', 'PDF file');
-      hideResult(result);
-      setBusy(button, true, 'Compressing…');
-      const data = await postJson('/api/pdf/compress', {
-        inputPath,
-        level: $('compressLevel').value,
-        outputDir: $('compressOutDir').value.trim(),
-        isRemoteUpload: isPdfRemoteMode()
+      await runPdfActionWithQueue(result, button, 'Compressing…', async () => {
+        const data = await postJson('/api/pdf/compress', {
+          inputPath,
+          level: $('compressLevel').value,
+          outputDir: $('compressOutDir').value.trim(),
+          isRemoteUpload: isPdfRemoteMode()
+        });
+        renderResult(result, data);
+        savePdfLastResult(result.id, data);
+        showToast(data.message || 'PDF compressed.', 'success');
+        setBusy(button, false);
       });
-      renderResult(result, data);
-      savePdfLastResult(result.id, data);
-      showToast(data.message || 'PDF compressed.', 'success');
     } catch (err) {
       renderError(result, err.message);
       showToast(err.message, 'error');
-    } finally {
       setBusy(button, false);
     }
   }
@@ -1259,21 +1406,21 @@
       if (!pages) {
         throw new Error('Enter a page range such as 1-5, 8, 10-12.');
       }
-      hideResult(result);
-      setBusy(button, true, 'Extracting…');
-      const data = await postJson('/api/pdf/split', {
-        inputPath,
-        pages,
-        outputDir: $('splitOutDir').value.trim(),
-        isRemoteUpload: isPdfRemoteMode()
+      await runPdfActionWithQueue(result, button, 'Extracting…', async () => {
+        const data = await postJson('/api/pdf/split', {
+          inputPath,
+          pages,
+          outputDir: $('splitOutDir').value.trim(),
+          isRemoteUpload: isPdfRemoteMode()
+        });
+        renderResult(result, data);
+        savePdfLastResult(result.id, data);
+        showToast(data.message || 'Pages extracted.', 'success');
+        setBusy(button, false);
       });
-      renderResult(result, data);
-      savePdfLastResult(result.id, data);
-      showToast(data.message || 'Pages extracted.', 'success');
     } catch (err) {
       renderError(result, err.message);
       showToast(err.message, 'error');
-    } finally {
       setBusy(button, false);
     }
   }
@@ -1283,21 +1430,21 @@
     const result = $('rotateResult');
     try {
       const inputPath = readSinglePath('rotatePath', 'pdf', 'PDF file');
-      hideResult(result);
-      setBusy(button, true, 'Rotating…');
-      const data = await postJson('/api/pdf/rotate', {
-        inputPath,
-        angle: rotateAngle,
-        outputDir: $('rotateOutDir').value.trim(),
-        isRemoteUpload: isPdfRemoteMode()
+      await runPdfActionWithQueue(result, button, 'Rotating…', async () => {
+        const data = await postJson('/api/pdf/rotate', {
+          inputPath,
+          angle: rotateAngle,
+          outputDir: $('rotateOutDir').value.trim(),
+          isRemoteUpload: isPdfRemoteMode()
+        });
+        renderResult(result, data);
+        savePdfLastResult(result.id, data);
+        showToast(data.message || 'PDF rotated.', 'success');
+        setBusy(button, false);
       });
-      renderResult(result, data);
-      savePdfLastResult(result.id, data);
-      showToast(data.message || 'PDF rotated.', 'success');
     } catch (err) {
       renderError(result, err.message);
       showToast(err.message, 'error');
-    } finally {
       setBusy(button, false);
     }
   }
@@ -1309,20 +1456,20 @@
       if (imagePaths.length < 1) {
         throw new Error('Add at least one JPG or PNG image.');
       }
-      hideResult(result);
-      setBusy(button, true, 'Creating PDF…');
-      const data = await postJson('/api/pdf/images-to-pdf', {
-        imagePaths: imagePaths.slice(),
-        outputDir: $('imageOutDir').value.trim(),
-        isRemoteUpload: isPdfRemoteMode()
+      await runPdfActionWithQueue(result, button, 'Creating PDF…', async () => {
+        const data = await postJson('/api/pdf/images-to-pdf', {
+          imagePaths: imagePaths.slice(),
+          outputDir: $('imageOutDir').value.trim(),
+          isRemoteUpload: isPdfRemoteMode()
+        });
+        renderResult(result, data);
+        savePdfLastResult(result.id, data);
+        showToast(data.message || 'PDF created.', 'success');
+        setBusy(button, false);
       });
-      renderResult(result, data);
-      savePdfLastResult(result.id, data);
-      showToast(data.message || 'PDF created.', 'success');
     } catch (err) {
       renderError(result, err.message);
       showToast(err.message, 'error');
-    } finally {
       setBusy(button, false);
     }
   }
@@ -1332,23 +1479,23 @@
     const result = $('toImagesResult');
     try {
       const inputPath = readSinglePath('toImagesPath', 'pdf', 'PDF file');
-      hideResult(result);
-      setBusy(button, true, 'Exporting pages…');
-      const data = await postJson('/api/pdf/pdf-to-images', {
-        inputPath,
-        outputDir: $('toImagesOutDir').value.trim(),
-        dpi: $('toImagesDpi').value,
-        firstPage: $('toImagesFirst').value.trim() || undefined,
-        lastPage: $('toImagesLast').value.trim() || undefined,
-        isRemoteUpload: isPdfRemoteMode()
+      await runPdfActionWithQueue(result, button, 'Exporting pages…', async () => {
+        const data = await postJson('/api/pdf/pdf-to-images', {
+          inputPath,
+          outputDir: $('toImagesOutDir').value.trim(),
+          dpi: $('toImagesDpi').value,
+          firstPage: $('toImagesFirst').value.trim() || undefined,
+          lastPage: $('toImagesLast').value.trim() || undefined,
+          isRemoteUpload: isPdfRemoteMode()
+        });
+        renderResult(result, data);
+        savePdfLastResult(result.id, data);
+        showToast(data.message || 'Pages exported.', 'success');
+        setBusy(button, false);
       });
-      renderResult(result, data);
-      savePdfLastResult(result.id, data);
-      showToast(data.message || 'Pages exported.', 'success');
     } catch (err) {
       renderError(result, err.message);
       showToast(err.message, 'error');
-    } finally {
       setBusy(button, false);
     }
   }

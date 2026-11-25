@@ -2669,18 +2669,33 @@ function initActiveJobView(jobData) {
 
   const job = jobData.activeJob || jobData;
 
-  activeJobTitle.textContent = `Processing: ${job.filename || jobData.name || 'Task'}`;
-  activeJobStatusPill.className = 'status-pill status-processing';
-  activeJobStatusPill.textContent = 'Processing';
-  activeJobCommand.textContent = jobData.commandString || job.commandString || 'ffmpeg ...';
+  if (job.status === 'queued') {
+    const queuePos = job.queuePosition || 1;
+    activeJobTitle.textContent = `In Queue: ${job.filename || jobData.name || 'Task'}`;
+    activeJobStatusPill.className = 'status-pill status-queued';
+    activeJobStatusPill.textContent = `Queued (Position #${queuePos})`;
+    activeJobCommand.textContent = `Waiting for active processes to finish... File position in queue: #${queuePos}`;
+    updateProgressStats({
+      progress: 0,
+      currentTime: 'In Queue',
+      totalDuration: `Position #${queuePos}`,
+      speed: 'Waiting in line...',
+      filename: job.filename || jobData.name || '-'
+    });
+  } else {
+    activeJobTitle.textContent = `Processing: ${job.filename || jobData.name || 'Task'}`;
+    activeJobStatusPill.className = 'status-pill status-processing';
+    activeJobStatusPill.textContent = 'Processing';
+    activeJobCommand.textContent = jobData.commandString || job.commandString || 'ffmpeg ...';
 
-  updateProgressStats({
-    progress: job.progress || 0,
-    currentTime: job.currentTime || '00:00:00',
-    totalDuration: job.totalDuration || '00:00:00',
-    speed: job.speed || 'N/A',
-    filename: job.filename || jobData.name || '-'
-  });
+    updateProgressStats({
+      progress: job.progress || 0,
+      currentTime: job.currentTime || '00:00:00',
+      totalDuration: job.totalDuration || '00:00:00',
+      speed: job.speed || 'N/A',
+      filename: job.filename || jobData.name || '-'
+    });
+  }
 
   if (btnViewActiveLogs) {
     btnViewActiveLogs.onclick = () => openLogModal(jobData.jobId || currentJobId, jobData.commandString || job.commandString);
@@ -2712,6 +2727,34 @@ function listenJobProgress(jobId) {
         console.log('[SSE] Message received:', data.type, data);
 
         if (data.type === 'progress' || data.type === 'init') {
+          const status = data.status || data.activeJob?.status || 'idle';
+          if (status === 'queued') {
+            const queuePos = data.queuePosition || data.activeJob?.queuePosition || 1;
+            if (activeJobStatusPill) {
+              activeJobStatusPill.className = 'status-pill status-queued';
+              activeJobStatusPill.textContent = `Queued (Position #${queuePos})`;
+            }
+            if (activeJobTitle) {
+              activeJobTitle.textContent = `In Queue: ${data.activeJob?.filename || selectedMedia?.name || 'Task'}`;
+            }
+            updateProgressStats({
+              progress: 0,
+              currentTime: 'In Queue',
+              totalDuration: `Position #${queuePos}`,
+              speed: 'Waiting in line...',
+              filename: data.activeJob?.filename || selectedMedia?.name || '-'
+            });
+            return;
+          } else if (status === 'processing') {
+            if (activeJobStatusPill && activeJobStatusPill.textContent.includes('Queued')) {
+              activeJobStatusPill.className = 'status-pill status-processing';
+              activeJobStatusPill.textContent = 'Processing';
+              if (activeJobTitle) {
+                activeJobTitle.textContent = `Processing: ${data.activeJob?.filename || selectedMedia?.name || 'Task'}`;
+              }
+            }
+          }
+
           const pct = data.progress !== undefined ? data.progress : (data.activeJob?.progress || 0);
           const curTime = data.currentTime || data.activeJob?.currentTime || '00:00:00';
           const totDur = data.totalDuration || data.activeJob?.totalDuration || '00:00:00';

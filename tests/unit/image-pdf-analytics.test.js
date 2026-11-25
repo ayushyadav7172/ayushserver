@@ -141,4 +141,47 @@ describe('Image & PDF Studio Analytics Tracking', () => {
     assert.ok(data.image.totalProcessed >= 0);
     assert.ok(data.pdf.totalProcessed >= 0);
   });
+
+  test('GET /api/queue/status returns locks and isIdle state', async () => {
+    const res = await fetch(`${baseUrl}/api/queue/status`, {
+      headers: { 'Connection': 'close' }
+    });
+    assert.equal(res.status, 200);
+
+    const data = await res.json();
+    assert.ok(data.locks, 'Should contain locks property');
+    assert.equal(typeof data.locks.media, 'boolean');
+    assert.equal(typeof data.locks.image, 'boolean');
+    assert.equal(typeof data.locks.pdf, 'boolean');
+    assert.equal(typeof data.isIdle, 'boolean');
+  });
+
+  test('acquireImageLock and acquirePdfLock throw 409 with busy metadata when media is processing', () => {
+    const originalIsMedia = concurrencyLock.isMediaProcessing;
+    concurrencyLock.isMediaProcessing = () => true;
+
+    try {
+      assert.throws(() => {
+        concurrencyLock.acquireImageLock('convert');
+      }, (err) => {
+        assert.equal(err.status, 409);
+        assert.equal(err.busy, true);
+        assert.equal(err.activeType, 'media');
+        assert.ok(err.queuePosition >= 1);
+        return true;
+      });
+
+      assert.throws(() => {
+        concurrencyLock.acquirePdfLock('PDF Merge');
+      }, (err) => {
+        assert.equal(err.status, 409);
+        assert.equal(err.busy, true);
+        assert.equal(err.activeType, 'media');
+        assert.ok(err.queuePosition >= 1);
+        return true;
+      });
+    } finally {
+      concurrencyLock.isMediaProcessing = originalIsMedia;
+    }
+  });
 });

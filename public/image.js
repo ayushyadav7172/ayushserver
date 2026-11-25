@@ -129,7 +129,11 @@
     }
 
     if (!response.ok || data.success === false) {
-      throw new Error(data.error || `Request failed (${response.status})`);
+      const err = new Error(data.error || `Request failed (${response.status})`);
+      err.status = response.status;
+      err.busy = Boolean(data.busy || response.status === 409);
+      err.data = data;
+      throw err;
     }
     return data;
   }
@@ -948,6 +952,156 @@
     return $('btnConvertRun');
   }
 
+  let imageQueuePollTimer = null;
+
+  function renderQueueResult(queueInfo, onCancel) {
+    const shell = resultShell($('imageResult'), {
+      badge: 'In Queue',
+      meta: 'Waiting for active tasks to complete'
+    });
+    const status = document.createElement('div');
+    status.className = 'image-run-status';
+    status.style.flexDirection = 'column';
+    status.style.alignItems = 'flex-start';
+    status.style.gap = '10px';
+    status.style.padding = '14px 16px';
+
+    const rowTop = document.createElement('div');
+    rowTop.style.display = 'flex';
+    rowTop.style.alignItems = 'center';
+    rowTop.style.gap = '10px';
+
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    const label = document.createElement('strong');
+    label.id = 'imageQueueTitle';
+    const pos = queueInfo.queuePosition || 1;
+    label.textContent = `Aapki file Queue me hai (Aage ${pos} file baaki hai)`;
+    rowTop.append(spinner, label);
+
+    const desc = document.createElement('div');
+    desc.id = 'imageQueueDesc';
+    desc.style.fontSize = '13px';
+    desc.style.color = 'var(--text-muted, #94a3b8)';
+    desc.textContent = `Server abhi ${queueInfo.activeJobName || 'video task'} process kar raha hai. Jaise hi complete hoga, automatically start hoga!`;
+
+    const countdownRow = document.createElement('div');
+    countdownRow.style.display = 'flex';
+    countdownRow.style.alignItems = 'center';
+    countdownRow.style.gap = '12px';
+    countdownRow.style.fontSize = '12px';
+
+    const cdText = document.createElement('span');
+    cdText.id = 'imageQueueCountdown';
+    cdText.style.color = 'var(--accent, #38bdf8)';
+    cdText.textContent = 'Live checking status in 3s...';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-ghost btn-sm';
+    cancelBtn.style.padding = '4px 10px';
+    cancelBtn.style.fontSize = '12px';
+    cancelBtn.style.color = '#ef4444';
+    cancelBtn.textContent = 'Cancel Queue';
+    cancelBtn.onclick = onCancel;
+
+    countdownRow.append(cdText, cancelBtn);
+    status.append(rowTop, desc, countdownRow);
+    shell.body.appendChild(status);
+  }
+
+  function startImageAutoQueue(payload, button, busyLabel, busyData) {
+    if (imageQueuePollTimer) clearInterval(imageQueuePollTimer);
+    let secondsLeft = 3;
+    let cancelled = false;
+
+    state.inQueue = true;
+    state.busy = true;
+    setBusy(button, true, 'In Queue…');
+
+    const stopQueue = () => {
+      cancelled = true;
+      if (imageQueuePollTimer) {
+        clearInterval(imageQueuePollTimer);
+        imageQueuePollTimer = null;
+      }
+      state.inQueue = false;
+      state.busy = false;
+      setBusy(button, false);
+      showToast('Queue wait cancelled.', 'warning');
+      renderErrorResult('Queue wait cancelled by user.');
+    };
+
+    renderQueueResult({
+      queuePosition: busyData.queuePosition || 1,
+      activeJobName: busyData.activeJobName || 'media task'
+    }, stopQueue);
+
+    imageQueuePollTimer = setInterval(async () => {
+      if (cancelled) return;
+      secondsLeft--;
+      const cdEl = $('imageQueueCountdown');
+      if (cdEl) cdEl.textContent = `Live checking in ${secondsLeft}s...`;
+
+      if (secondsLeft <= 0) {
+        secondsLeft = 3;
+        try {
+          const res = await fetch('/api/queue/status');
+          if (!res.ok) return;
+          const qStatus = await res.json();
+          if (cancelled) return;
+
+          if (qStatus.isIdle) {
+            if (imageQueuePollTimer) {
+              clearInterval(imageQueuePollTimer);
+              imageQueuePollTimer = null;
+            }
+            state.inQueue = false;
+            showToast('Aapka number aa gaya! Starting image processing...', 'success');
+            setBusy(button, true, busyLabel);
+            renderRunningResult(payload.inputPaths.length);
+
+            try {
+              const data = await postJson('/api/image/process', payload);
+              const results = Array.isArray(data.results) ? data.results : [];
+              const failures = results.filter((item) => !item.success);
+              if (data.summary && Number.isFinite(Number(data.summary.totalOutputSize))) {
+                state.actualTotal = Number(data.summary.totalOutputSize);
+              }
+              renderResults(data);
+              syncSizeStrip();
+              if (failures.length === 0) {
+                showToast(data.message || 'Images processed.', 'success');
+              } else {
+                showToast(data.message || 'Finished with errors.', data.processed > 0 ? 'warning' : 'error');
+              }
+            } catch (execErr) {
+              if (execErr.busy) {
+                startImageAutoQueue(payload, button, busyLabel, execErr.data || {});
+                return;
+              }
+              renderErrorResult(execErr.message);
+              showToast(execErr.message, 'error');
+            } finally {
+              if (!state.inQueue) {
+                setBusy(button, false);
+                state.busy = false;
+              }
+            }
+          } else {
+            const titleEl = $('imageQueueTitle');
+            const descEl = $('imageQueueDesc');
+            const pos = (qStatus.queuedCount || 0) + (qStatus.locks?.media ? 1 : 0);
+            if (titleEl) titleEl.textContent = `Aapki file Queue me hai (Aage ${pos || 1} file baaki hai)`;
+            if (descEl && qStatus.activeJobInfo) descEl.textContent = `Server abhi ${qStatus.activeJobInfo} process kar raha hai. Jaise hi complete hoga, automatically start hoga!`;
+          }
+        } catch (pollErr) {
+          console.warn('[Queue Poll] error:', pollErr.message);
+        }
+      }
+    }, 1000);
+  }
+
   async function runCurrentOperation() {
     if (state.busy) return;
     const button = runButtonForTool();
@@ -979,11 +1133,17 @@
         showToast(failures[0].error || 'One or more images failed.', 'error');
       }
     } catch (err) {
+      if (err.busy) {
+        startImageAutoQueue(payload, button, busyLabels[state.activeTool] || 'Working…', err.data || {});
+        return;
+      }
       renderErrorResult(err.message);
       showToast(err.message, 'error');
     } finally {
-      setBusy(button, false);
-      state.busy = false;
+      if (!state.inQueue) {
+        setBusy(button, false);
+        state.busy = false;
+      }
     }
   }
 
