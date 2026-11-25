@@ -23,36 +23,26 @@ app.disable('x-powered-by');
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
-// Directories
+// Directories - Unified 2-folder system (uploads for all inputs, processed for all outputs)
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const THUMBS_DIR = path.join(__dirname, 'temp_thumbs');
-const TEMP_UPLOADS_DIR = path.join(__dirname, 'temp_uploads');
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const PROCESSED_DIR = path.join(__dirname, 'processed');
-const PDF_TEMP_UPLOADS_DIR = path.join(__dirname, 'temp_pdf_uploads');
-const PDF_OUTPUTS_DIR = path.join(__dirname, 'pdf_outputs');
 
-if (!fs.existsSync(PUBLIC_DIR)) {
-  fs.mkdirSync(PUBLIC_DIR, { recursive: true });
-}
-if (!fs.existsSync(THUMBS_DIR)) {
-  fs.mkdirSync(THUMBS_DIR, { recursive: true });
-}
-if (!fs.existsSync(TEMP_UPLOADS_DIR)) {
-  fs.mkdirSync(TEMP_UPLOADS_DIR, { recursive: true });
-}
-if (!fs.existsSync(PROCESSED_DIR)) {
-  fs.mkdirSync(PROCESSED_DIR, { recursive: true });
-}
-if (!fs.existsSync(PDF_TEMP_UPLOADS_DIR)) {
-  fs.mkdirSync(PDF_TEMP_UPLOADS_DIR, { recursive: true });
-}
-if (!fs.existsSync(PDF_OUTPUTS_DIR)) {
-  fs.mkdirSync(PDF_OUTPUTS_DIR, { recursive: true });
+// Compatibility aliases
+const TEMP_UPLOADS_DIR = UPLOADS_DIR;
+const PDF_TEMP_UPLOADS_DIR = UPLOADS_DIR;
+const PDF_OUTPUTS_DIR = PROCESSED_DIR;
+
+for (const d of [PUBLIC_DIR, THUMBS_DIR, UPLOADS_DIR, PROCESSED_DIR]) {
+  if (!fs.existsSync(d)) {
+    fs.mkdirSync(d, { recursive: true });
+  }
 }
 
 // ======================== PATH SAFETY (ALLOWLIST) ========================
 // Only media under phone storage or the Termux home directory may be accessed.
-const ALLOWED_ROOTS = ['/sdcard', '/storage', process.env.HOME || os.homedir(), __dirname, TEMP_UPLOADS_DIR, PROCESSED_DIR, PDF_TEMP_UPLOADS_DIR, PDF_OUTPUTS_DIR]
+const ALLOWED_ROOTS = ['/sdcard', '/storage', process.env.HOME || os.homedir(), __dirname, UPLOADS_DIR, PROCESSED_DIR, THUMBS_DIR]
   .filter(Boolean);
 
 // Resolve symlinks and canonicalize target paths with traversal and loop protection
@@ -399,7 +389,7 @@ function buildOutputDownloadUrl(filePath) {
   const resolved = path.resolve(String(filePath));
   const parent = path.dirname(resolved);
   const filename = path.basename(resolved);
-  const isRootedInDownloadDir = [PROCESSED_DIR, TEMP_UPLOADS_DIR, PDF_OUTPUTS_DIR, PDF_TEMP_UPLOADS_DIR]
+  const isRootedInDownloadDir = [PROCESSED_DIR, UPLOADS_DIR]
     .filter(Boolean)
     .some(dir => path.resolve(dir) === parent);
   if (isRootedInDownloadDir) {
@@ -816,7 +806,7 @@ function isFileInActiveProcessing(filePath) {
 
 // Rule D: Immediately clean up temp uploaded file(s) on cancel/error
 function cleanupTempUploadsOnError(...filePaths) {
-  const tempDirs = [TEMP_UPLOADS_DIR, PDF_TEMP_UPLOADS_DIR, THUMBS_DIR];
+  const tempDirs = [UPLOADS_DIR, THUMBS_DIR];
   for (const p of filePaths) {
     if (!p || typeof p !== 'string') continue;
     try {
@@ -885,10 +875,8 @@ function runAutoCleanup() {
   console.log('[Cleanup] Running periodic sweep...');
   try {
     wakeLockManager.cleanupStaleLocks(STALE_LOCK_TIMEOUT_MS);
-    cleanDirectory(TEMP_UPLOADS_DIR, true);
-    cleanDirectory(PDF_TEMP_UPLOADS_DIR, true);
+    cleanDirectory(UPLOADS_DIR, true);
     cleanDirectory(PROCESSED_DIR, false);
-    cleanDirectory(PDF_OUTPUTS_DIR, false);
     cleanDirectory(THUMBS_DIR, false);
   } catch (err) {
     console.error('[Cleanup] Periodic sweep encountered an error:', err);
@@ -3593,7 +3581,7 @@ app.get('/api/current-job', (req, res) => {
 });
 
 // ======================== REMOTE UPLOAD & DOWNLOAD ENDPOINTS ========================
-// POST /api/upload: Upload files to temp_uploads/ with no file size limit & 30-min auto-cleanup
+// POST /api/upload: Upload files to uploads/ with no file size limit & 30-min auto-cleanup
 app.post('/api/upload', (req, res) => {
   uploadMiddleware.any()(req, res, (err) => {
     if (err) {
@@ -3661,9 +3649,7 @@ app.get('/api/download/:filename', (req, res) => {
 
     const allowedDownloadDirs = [
       PROCESSED_DIR,
-      TEMP_UPLOADS_DIR,
-      PDF_OUTPUTS_DIR,
-      PDF_TEMP_UPLOADS_DIR
+      UPLOADS_DIR
     ].filter(Boolean);
 
     let foundPath = null;

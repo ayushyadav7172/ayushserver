@@ -47,8 +47,8 @@ const COMPRESSION_PRESETS = {
   strong: 'screen'
 };
 
-const UPLOAD_TEMP_DIR = path.join(__dirname, 'temp_pdf_uploads');
-const UPLOAD_OUTPUT_DIR = path.join(__dirname, 'pdf_outputs');
+const UPLOAD_TEMP_DIR = path.join(__dirname, 'uploads');
+const UPLOAD_OUTPUT_DIR = path.join(__dirname, 'processed');
 
 function isMemoryFailure(err) {
   if (!err) return false;
@@ -87,6 +87,7 @@ function createPdfRouter(deps) {
     wakeLockManager
   } = deps || {};
 
+  const EFFECTIVE_TEMP_DIR = TEMP_UPLOADS_DIR || UPLOAD_TEMP_DIR;
   const EFFECTIVE_OUTPUT_DIR = PROCESSED_DIR || UPLOAD_OUTPUT_DIR;
 
   if (typeof assertPathAllowed !== 'function' || typeof createHttpError !== 'function') {
@@ -97,7 +98,7 @@ function createPdfRouter(deps) {
 
   const upload = fileUpload({
     useTempFiles: true,
-    tempFileDir: UPLOAD_TEMP_DIR,
+    tempFileDir: EFFECTIVE_TEMP_DIR,
     preserveExtension: true,
     safeFileNames: true,
     createParentPath: true,
@@ -199,14 +200,14 @@ function createPdfRouter(deps) {
   async function cleanupStaleTempFiles() {
     let entries = [];
     try {
-      entries = await fs.promises.readdir(UPLOAD_TEMP_DIR);
+      entries = await fs.promises.readdir(EFFECTIVE_TEMP_DIR);
     } catch (err) {
       return;
     }
 
     const cutoff = Date.now() - STALE_TEMP_MAX_AGE_MS;
     await Promise.all(entries.map(async (name) => {
-      const filePath = path.join(UPLOAD_TEMP_DIR, name);
+      const filePath = path.join(EFFECTIVE_TEMP_DIR, name);
       try {
         const stat = await fs.promises.stat(filePath);
         if (stat.isFile() && stat.mtimeMs < cutoff) {
@@ -342,7 +343,7 @@ function createPdfRouter(deps) {
 
   function buildDownloadUrl(filePath, download = true) {
     const parent = path.dirname(filePath);
-    const isDirectInRoot = parent === PROCESSED_DIR || parent === TEMP_UPLOADS_DIR || parent === UPLOAD_OUTPUT_DIR;
+    const isDirectInRoot = parent === EFFECTIVE_OUTPUT_DIR || parent === EFFECTIVE_TEMP_DIR;
     if (download && isDirectInRoot) {
       return `/api/download/${encodeURIComponent(path.basename(filePath))}`;
     }
@@ -366,7 +367,7 @@ function createPdfRouter(deps) {
     if (file.tempFilePath) return file.tempFilePath;
     if (!file.data) throw createHttpError(400, 'Uploaded file has no data.');
     const tempPath = path.join(
-      UPLOAD_TEMP_DIR,
+      EFFECTIVE_TEMP_DIR,
       `${Date.now()}_${crypto.randomBytes(6).toString('hex')}${ext}`
     );
     try {
@@ -1530,7 +1531,7 @@ function createPdfRouter(deps) {
       try {
         fs.rmSync(outputDir, { recursive: true, force: true });
       } catch (cleanupErr) {}
-      // NOTE: Do NOT delete sourcePath here! The uploaded input file must remain in temp_uploads
+      // NOTE: Do NOT delete sourcePath here! The uploaded input file must remain in uploads
       // so the user can retry without encountering a 404 error.
       throw err;
     } finally {

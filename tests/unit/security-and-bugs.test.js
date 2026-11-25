@@ -20,7 +20,7 @@ const {
 describe('Security, Logic & Async Fixes (Sections 2, 3, 4)', () => {
   let server;
   let baseUrl;
-  const sampleVideoPath = path.join(__dirname, '..', '..', 'temp_uploads', 'sec_test_sample.mp4');
+  const sampleVideoPath = path.join(__dirname, '..', '..', 'uploads', 'sec_test_sample.mp4');
 
   before(async () => {
     if (!fs.existsSync(sampleVideoPath)) {
@@ -199,7 +199,7 @@ describe('Security, Logic & Async Fixes (Sections 2, 3, 4)', () => {
     const doc = await PDFDocument.create();
     doc.addPage([200, 200]);
     const pdfBytes = await doc.save();
-    const pdfPath = path.join(__dirname, '..', '..', 'temp_pdf_uploads', `range_test_${Date.now()}.pdf`);
+    const pdfPath = path.join(__dirname, '..', '..', 'uploads', `range_test_${Date.now()}.pdf`);
     fs.writeFileSync(pdfPath, pdfBytes);
 
     try {

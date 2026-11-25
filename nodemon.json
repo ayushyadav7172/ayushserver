@@ -15,10 +15,8 @@
     ".git/**",
     "database/*.db*",
     "backups/**",
-    "temp_uploads/**",
+    "uploads/**",
     "processed/**",
-    "temp_pdf_uploads/**",
-    "pdf_outputs/**",
     "temp_thumbs/**",
     "downloads/**",
     "*.log"

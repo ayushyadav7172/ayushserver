@@ -10,7 +10,7 @@ const { app, databaseManager, jobManager, queueManager, cleanupManager, backupMa
 describe('API Integration: Media Job Lifecycle, Queue & Recovery', () => {
   let server;
   let baseUrl;
-  const sampleVideoPath = path.join(__dirname, '..', '..', 'temp_uploads', 'sample_test.mp4');
+  const sampleVideoPath = path.join(__dirname, '..', '..', 'uploads', 'sample_test.mp4');
 
   before(async () => {
     // Generate sample test video if missing

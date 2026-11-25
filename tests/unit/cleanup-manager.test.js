@@ -17,17 +17,15 @@ describe('Centralized Cleanup Manager', () => {
 
     cm = new CleanupManager({
       rootDir: testTempDir,
-      tempUploadsDir: path.join(testTempDir, 'temp_uploads'),
-      tempPdfUploadsDir: path.join(testTempDir, 'temp_pdf_uploads'),
-      tempThumbsDir: path.join(testTempDir, 'temp_thumbs'),
+      uploadsDir: path.join(testTempDir, 'uploads'),
       processedDir: path.join(testTempDir, 'processed'),
-      pdfOutputsDir: path.join(testTempDir, 'pdf_outputs'),
+      tempThumbsDir: path.join(testTempDir, 'temp_thumbs'),
       cleanupIntervalMs: 60000,
       retentionMs: 100 // 100ms for quick test
     });
 
-    fs.mkdirSync(cm.tempUploadsDir, { recursive: true });
-    fs.mkdirSync(cm.tempPdfUploadsDir, { recursive: true });
+    fs.mkdirSync(cm.uploadsDir, { recursive: true });
+    fs.mkdirSync(cm.processedDir, { recursive: true });
     fs.mkdirSync(cm.tempThumbsDir, { recursive: true });
   });
 
@@ -48,6 +46,28 @@ describe('Centralized Cleanup Manager', () => {
     const summary = await cm.runCleanup();
     assert.equal(fs.existsSync(expiredFile), false);
     assert.ok(summary.totalDeleted >= 1);
+  });
+
+  test('deletes expired processed media and pdf output files', async () => {
+    const expiredProcessedVideo = path.join(cm.processedDir, 'output_video.mp4');
+    const expiredProcessedImage = path.join(cm.processedDir, 'output_image.webp');
+    const expiredPdfOutput = path.join(cm.processedDir, 'compressed_doc.pdf');
+
+    fs.writeFileSync(expiredProcessedVideo, 'fake video stream');
+    fs.writeFileSync(expiredProcessedImage, 'fake image data');
+    fs.writeFileSync(expiredPdfOutput, 'fake pdf data');
+
+    const pastTime = (Date.now() - 60000) / 1000;
+    fs.utimesSync(expiredProcessedVideo, pastTime, pastTime);
+    fs.utimesSync(expiredProcessedImage, pastTime, pastTime);
+    fs.utimesSync(expiredPdfOutput, pastTime, pastTime);
+
+    const summary = await cm.runCleanup();
+    assert.equal(fs.existsSync(expiredProcessedVideo), false, 'Processed video should be deleted');
+    assert.equal(fs.existsSync(expiredProcessedImage), false, 'Processed image should be deleted');
+    assert.equal(fs.existsSync(expiredPdfOutput), false, 'PDF output should be deleted');
+    assert.ok(summary.processed.deleted >= 3);
+    assert.ok(summary.totalDeleted >= 3);
   });
 
   test('protects active files from deletion', async () => {

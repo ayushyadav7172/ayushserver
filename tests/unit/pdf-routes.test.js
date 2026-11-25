@@ -11,7 +11,7 @@ const { createPdfRouter } = require('../../pdf-routes');
 describe('PDF Studio & Routes Validation', () => {
   let server;
   let baseUrl;
-  const tempDir = path.join(__dirname, '..', '..', 'temp_pdf_uploads');
+  const tempDir = path.join(__dirname, '..', '..', 'uploads');
 
   before(async () => {
     if (!fs.existsSync(tempDir)) {

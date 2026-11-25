@@ -22,7 +22,7 @@ const { DatabaseManager } = require('../../database/database');
 describe('Section 1: Concurrency, Locks, Shutdown & DB Restore Fixes', () => {
   let server;
   let baseUrl;
-  const sampleVideoPath = path.join(__dirname, '..', '..', 'temp_uploads', `sec1_test_${Date.now()}.mp4`);
+  const sampleVideoPath = path.join(__dirname, '..', '..', 'uploads', `sec1_test_${Date.now()}.mp4`);
 
   before(async () => {
     if (!fs.existsSync(sampleVideoPath)) {
@@ -132,7 +132,7 @@ describe('Section 1: Concurrency, Locks, Shutdown & DB Restore Fixes', () => {
     const { jobId } = await startRes.json();
 
     // Send an invalid 404 request (inside allowed root so it hits 404 on any OS) while jobId is processing/queued
-    const missingAllowedPath = path.join(__dirname, '..', '..', 'temp_uploads', 'does_not_exist_12345.mp4');
+    const missingAllowedPath = path.join(__dirname, '..', '..', 'uploads', 'does_not_exist_12345.mp4');
     const badRes = await fetch(`${baseUrl}/api/process-direct`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Connection': 'close' },

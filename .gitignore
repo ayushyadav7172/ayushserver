@@ -1,14 +1,10 @@
 node_modules/
 .env
 no/
-temp_uploads/*
-!temp_uploads/.gitkeep
-temp_pdf_uploads/*
-!temp_pdf_uploads/.gitkeep
+uploads/*
+!uploads/.gitkeep
 processed/*
 !processed/.gitkeep
-pdf_outputs/*
-!pdf_outputs/.gitkeep
 temp_thumbs/*
 !temp_thumbs/.gitkeep
 *.log

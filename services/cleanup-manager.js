@@ -14,11 +14,12 @@ const DEFAULT_RETENTION_MS = 30 * 60 * 1000; // 30 minutes
 class CleanupManager {
   constructor(options = {}) {
     this.rootDir = options.rootDir || path.resolve(__dirname, '..');
-    this.tempUploadsDir = options.tempUploadsDir || path.join(this.rootDir, 'temp_uploads');
-    this.tempPdfUploadsDir = options.tempPdfUploadsDir || path.join(this.rootDir, 'temp_pdf_uploads');
-    this.tempThumbsDir = options.tempThumbsDir || path.join(this.rootDir, 'temp_thumbs');
+    this.uploadsDir = options.uploadsDir || options.tempUploadsDir || path.join(this.rootDir, 'uploads');
+    this.tempUploadsDir = this.uploadsDir; // alias for backwards compatibility
     this.processedDir = options.processedDir || path.join(this.rootDir, 'processed');
-    this.pdfOutputsDir = options.pdfOutputsDir || path.join(this.rootDir, 'pdf_outputs');
+    this.tempThumbsDir = options.tempThumbsDir || path.join(this.rootDir, 'temp_thumbs');
+    this.tempPdfUploadsDir = options.tempPdfUploadsDir || this.uploadsDir;
+    this.pdfOutputsDir = options.pdfOutputsDir || this.processedDir;
 
     this.cleanupIntervalMs = options.cleanupIntervalMs || DEFAULT_CLEANUP_INTERVAL_MS;
     this.retentionMs = options.retentionMs || DEFAULT_RETENTION_MS;
@@ -195,8 +196,8 @@ class CleanupManager {
     console.log('[CleanupManager] Starting cleanup cycle...');
 
     const summary = {
-      tempUploads: this.cleanDirectory(this.tempUploadsDir, options),
-      tempPdfUploads: this.cleanDirectory(this.tempPdfUploadsDir, options),
+      uploads: this.cleanDirectory(this.uploadsDir, options),
+      processed: this.cleanDirectory(this.processedDir, options),
       tempThumbs: this.cleanDirectory(this.tempThumbsDir, options),
       timestamp: startTime,
       durationMs: 0,
@@ -205,14 +206,27 @@ class CleanupManager {
       errors: []
     };
 
-    summary.totalDeleted = summary.tempUploads.deleted + summary.tempPdfUploads.deleted + summary.tempThumbs.deleted;
-    summary.totalBytesFreed = summary.tempUploads.bytesFreed + summary.tempPdfUploads.bytesFreed + summary.tempThumbs.bytesFreed;
+    summary.totalDeleted =
+      summary.uploads.deleted +
+      summary.processed.deleted +
+      summary.tempThumbs.deleted;
+
+    summary.totalBytesFreed =
+      summary.uploads.bytesFreed +
+      summary.processed.bytesFreed +
+      summary.tempThumbs.bytesFreed;
+
     summary.errors = [
-      ...summary.tempUploads.errors,
-      ...summary.tempPdfUploads.errors,
+      ...summary.uploads.errors,
+      ...summary.processed.errors,
       ...summary.tempThumbs.errors
     ];
     summary.durationMs = Date.now() - startTime;
+
+    // Backwards-compatible aliases for existing tests & dashboard views
+    summary.tempUploads = summary.uploads;
+    summary.tempPdfUploads = { scanned: 0, deleted: 0, bytesFreed: 0, errors: [] };
+    summary.pdfOutputs = { scanned: 0, deleted: 0, bytesFreed: 0, errors: [] };
 
     this.lastCleanupResult = summary;
     console.log(`[CleanupManager] Cycle finished: ${summary.totalDeleted} file(s) deleted, ${this.formatBytes(summary.totalBytesFreed)} freed in ${summary.durationMs}ms.`);
@@ -263,18 +277,14 @@ class CleanupManager {
 
   async getStorageStatsAsync() {
     const [
-      tempUploadsSize,
-      tempPdfUploadsSize,
+      uploadsSize,
       tempThumbsSize,
       processedSize,
-      pdfOutputsSize,
       diskInfo
     ] = await Promise.all([
-      this.getDirectorySizeAsync(this.tempUploadsDir),
-      this.getDirectorySizeAsync(this.tempPdfUploadsDir),
+      this.getDirectorySizeAsync(this.uploadsDir),
       this.getDirectorySizeAsync(this.tempThumbsDir),
       this.getDirectorySizeAsync(this.processedDir),
-      this.getDirectorySizeAsync(this.pdfOutputsDir),
       (async () => {
         try {
           const { stdout } = await execFileAsync('df', ['-k', this.rootDir], { timeout: 3000 });
@@ -294,16 +304,20 @@ class CleanupManager {
     ]);
 
     const { totalDiskBytes, freeDiskBytes } = diskInfo;
-    const totalAppUsage = tempUploadsSize + tempPdfUploadsSize + tempThumbsSize + processedSize + pdfOutputsSize;
+    const totalAppUsage = uploadsSize + tempThumbsSize + processedSize;
 
     return {
+      uploads: {
+        bytes: uploadsSize,
+        formatted: this.formatBytes(uploadsSize)
+      },
       tempUploads: {
-        bytes: tempUploadsSize,
-        formatted: this.formatBytes(tempUploadsSize)
+        bytes: uploadsSize,
+        formatted: this.formatBytes(uploadsSize)
       },
       tempPdfUploads: {
-        bytes: tempPdfUploadsSize,
-        formatted: this.formatBytes(tempPdfUploadsSize)
+        bytes: 0,
+        formatted: '0 B'
       },
       tempThumbs: {
         bytes: tempThumbsSize,
@@ -314,8 +328,8 @@ class CleanupManager {
         formatted: this.formatBytes(processedSize)
       },
       pdfOutputs: {
-        bytes: pdfOutputsSize,
-        formatted: this.formatBytes(pdfOutputsSize)
+        bytes: 0,
+        formatted: '0 B'
       },
       totalAppStorage: {
         bytes: totalAppUsage,
@@ -333,11 +347,9 @@ class CleanupManager {
   }
 
   getStorageStats() {
-    const tempUploadsSize = this.getDirectorySize(this.tempUploadsDir);
-    const tempPdfUploadsSize = this.getDirectorySize(this.tempPdfUploadsDir);
+    const uploadsSize = this.getDirectorySize(this.uploadsDir);
     const tempThumbsSize = this.getDirectorySize(this.tempThumbsDir);
     const processedSize = this.getDirectorySize(this.processedDir);
-    const pdfOutputsSize = this.getDirectorySize(this.pdfOutputsDir);
 
     let freeDiskBytes = 0;
     let totalDiskBytes = 0;
@@ -354,16 +366,20 @@ class CleanupManager {
       }
     } catch (e) {}
 
-    const totalAppUsage = tempUploadsSize + tempPdfUploadsSize + tempThumbsSize + processedSize + pdfOutputsSize;
+    const totalAppUsage = uploadsSize + tempThumbsSize + processedSize;
 
     return {
+      uploads: {
+        bytes: uploadsSize,
+        formatted: this.formatBytes(uploadsSize)
+      },
       tempUploads: {
-        bytes: tempUploadsSize,
-        formatted: this.formatBytes(tempUploadsSize)
+        bytes: uploadsSize,
+        formatted: this.formatBytes(uploadsSize)
       },
       tempPdfUploads: {
-        bytes: tempPdfUploadsSize,
-        formatted: this.formatBytes(tempPdfUploadsSize)
+        bytes: 0,
+        formatted: '0 B'
       },
       tempThumbs: {
         bytes: tempThumbsSize,
@@ -374,8 +390,8 @@ class CleanupManager {
         formatted: this.formatBytes(processedSize)
       },
       pdfOutputs: {
-        bytes: pdfOutputsSize,
-        formatted: this.formatBytes(pdfOutputsSize)
+        bytes: 0,
+        formatted: '0 B'
       },
       totalAppStorage: {
         bytes: totalAppUsage,
