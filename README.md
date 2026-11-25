@@ -238,3 +238,16 @@ Complete REST API documentation is available via the OpenAPI 3.1 specification:
 ## 📄 License
 
 This project is open-source software licensed under the [MIT License](LICENSE).
+
+---
+
+## 🙏 Acknowledgements & Credits
+
+This project is built upon and makes use of the following open-source tools and libraries:
+
+* **[FFmpeg](https://ffmpeg.org/)** — Industry standard multimedia framework for video and audio transcoding, filtering, and stream extraction.
+* **[Sharp](https://sharp.pixelplumbing.com/)** — High-performance Node.js image processing library powered by libvips.
+* **[PDF-lib](https://pdf-lib.js.org/)** — JavaScript library for PDF document generation and modification.
+* **[QPDF](https://qpdf.sourceforge.io/) & [Poppler](https://poppler.freedesktop.org/)** — Robust CLI utilities for PDF manipulation and rendering.
+* **[Termux](https://termux.dev/)** — Powerful Android terminal emulation and Linux environment.
+
