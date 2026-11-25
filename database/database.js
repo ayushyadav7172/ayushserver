@@ -434,8 +434,30 @@ class DatabaseManager {
     const mediaBytes = this.db.prepare(`
       SELECT SUM(bytes_processed) as totalBytes
       FROM analytics_events
-      WHERE status = 'completed'
+      WHERE status = 'completed' AND (type = 'media' OR type IS NULL)
     `).get();
+
+    const imageCounts = this.db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+        SUM(CASE WHEN status = 'completed' THEN bytes_processed ELSE 0 END) as totalBytes,
+        AVG(CASE WHEN status = 'completed' AND duration_ms > 0 THEN duration_ms ELSE NULL END) as avgDurationMs
+      FROM analytics_events
+      WHERE type = 'image'
+    `).get() || {};
+
+    const pdfCounts = this.db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+        SUM(CASE WHEN status = 'completed' THEN bytes_processed ELSE 0 END) as totalBytes,
+        AVG(CASE WHEN status = 'completed' AND duration_ms > 0 THEN duration_ms ELSE NULL END) as avgDurationMs
+      FROM analytics_events
+      WHERE type = 'pdf'
+    `).get() || {};
 
     const clearedAt = parseInt(this.getSetting('errors_cleared_at') || '0', 10);
     const recentErrors = this.db.prepare(`
@@ -459,7 +481,21 @@ class DatabaseManager {
         queued: jobCounts.queued || 0,
         avgDurationMs: Math.round(jobCounts.avgDurationMs || 0)
       },
-      totalBytesProcessed: mediaBytes.totalBytes || 0,
+      totalBytesProcessed: mediaBytes?.totalBytes || 0,
+      image: {
+        total: imageCounts.total || 0,
+        completed: imageCounts.completed || 0,
+        failed: imageCounts.failed || 0,
+        totalBytes: imageCounts.totalBytes || 0,
+        avgDurationMs: Math.round(imageCounts.avgDurationMs || 0)
+      },
+      pdf: {
+        total: pdfCounts.total || 0,
+        completed: pdfCounts.completed || 0,
+        failed: pdfCounts.failed || 0,
+        totalBytes: pdfCounts.totalBytes || 0,
+        avgDurationMs: Math.round(pdfCounts.avgDurationMs || 0)
+      },
       recentErrors: recentErrors.map(r => ({
         id: r.id,
         name: r.name,

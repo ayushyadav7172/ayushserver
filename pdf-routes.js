@@ -117,6 +117,7 @@ function createPdfRouter(deps) {
     return (req, res, next) => {
       let directWakeLock = null;
       req._pdfLockAcquired = false;
+      const pdfStartTime = Date.now();
       if (concurrencyLock) {
         try {
           concurrencyLock.acquirePdfLock(toolName);
@@ -128,9 +129,22 @@ function createPdfRouter(deps) {
         directWakeLock = wakeLockManager.acquire(`PDF Studio: ${toolName}`);
       }
       let released = false;
-      const release = () => {
+      const release = (status) => {
         if (!released) {
           released = true;
+          const durationMs = Date.now() - pdfStartTime;
+          if (deps.recordAnalyticsEvent && typeof deps.recordAnalyticsEvent === 'function') {
+            try {
+              let bytes = Number(res.getHeader('content-length') || req.headers['content-length'] || 0);
+              deps.recordAnalyticsEvent({
+                type: 'pdf',
+                operation: toolName,
+                status: status || (res.statusCode < 400 ? 'completed' : 'failed'),
+                bytesProcessed: isNaN(bytes) ? 0 : bytes,
+                durationMs
+              });
+            } catch (e) {}
+          }
           if (concurrencyLock && req._pdfLockAcquired) {
             req._pdfLockAcquired = false;
             concurrencyLock.releasePdfLock();
@@ -141,9 +155,9 @@ function createPdfRouter(deps) {
           }
         }
       };
-      res.once('finish', release);
-      res.once('close', release);
-      res.once('error', release);
+      res.once('finish', () => release(res.statusCode < 400 ? 'completed' : 'failed'));
+      res.once('close', () => release(res.writableEnded ? 'completed' : 'interrupted'));
+      res.once('error', () => release('failed'));
       next();
     };
   }

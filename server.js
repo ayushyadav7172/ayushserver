@@ -665,6 +665,8 @@ const concurrencyLock = {
   }
 };
 
+analyticsService.setConcurrencyLock(concurrencyLock);
+
 // Reset activeJob to idle after a delay (keeps data visible for result screen, then clears)
 function scheduleActiveJobReset(expectedJobId = null, delayMs = 60000) {
   const timer = setTimeout(() => {
@@ -2617,7 +2619,8 @@ app.use('/api/pdf', createPdfRouter({
   TEMP_UPLOADS_DIR,
   PROCESSED_DIR,
   cleanupTempUploadsOnError,
-  wakeLockManager
+  wakeLockManager,
+  recordAnalyticsEvent: (evt) => analyticsService.recordEvent(evt)
 }));
 
 // ======================== IMAGE STUDIO API (sharp) ========================
@@ -3403,6 +3406,7 @@ imageRouter.post('/process', imageAsyncRoute(async (req, res) => {
   const normalized = normalizeImageRequest(body);
 
   let lockAcquired = false;
+  const imageStartTime = Date.now();
   try {
     concurrencyLock.acquireImageLock(normalized.operation);
     lockAcquired = true;
@@ -3438,6 +3442,18 @@ imageRouter.post('/process', imageAsyncRoute(async (req, res) => {
     const totalOriginalSize = successful.reduce((sum, item) => sum + item.originalSize, 0);
     const totalOutputSize = successful.reduce((sum, item) => sum + item.size, 0);
     const savedBytes = totalOriginalSize - totalOutputSize;
+
+    if (results.length > 0) {
+      try {
+        analyticsService.recordEvent({
+          type: 'image',
+          operation: normalized.operation || 'process',
+          status: successful.length > 0 ? 'completed' : 'failed',
+          bytesProcessed: totalOutputSize || totalOriginalSize || 0,
+          durationMs: Date.now() - imageStartTime
+        });
+      } catch (evtErr) {}
+    }
 
     res.json({
       success: true,

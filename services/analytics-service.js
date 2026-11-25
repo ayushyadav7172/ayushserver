@@ -10,10 +10,15 @@ class AnalyticsService {
     this.db = options.db || databaseManager;
     this.queue = options.queue || queueManager;
     this.cleanup = options.cleanup || cleanupManager;
+    this.concurrencyLock = options.concurrencyLock || null;
     this.startTime = Date.now();
 
     this._cachedStorageStats = null;
     this._storageCacheTime = 0;
+  }
+
+  setConcurrencyLock(lock) {
+    this.concurrencyLock = lock;
   }
 
   formatBytes(bytes) {
@@ -85,7 +90,37 @@ class AnalyticsService {
       activeJobs: qStatus.activeJobs
     };
 
-    // 4. Storage stats (cached for 15s)
+    // 4. Image Studio stats
+    const imgSummary = summary.image || {};
+    const isImageBusy = Boolean(this.concurrencyLock?.imageJob?.isProcessing);
+    const imageStats = {
+      engine: 'Sharp (libvips)',
+      totalProcessed: imgSummary.completed || 0,
+      failed: imgSummary.failed || 0,
+      totalJobs: imgSummary.total || 0,
+      totalBytes: imgSummary.totalBytes || 0,
+      totalProcessedSize: this.formatBytes(imgSummary.totalBytes || 0),
+      avgProcessingTimeSeconds: imgSummary.avgDurationMs ? parseFloat((imgSummary.avgDurationMs / 1000).toFixed(1)) : 0,
+      isProcessing: isImageBusy,
+      currentOperation: isImageBusy ? (this.concurrencyLock?.imageJob?.operation || 'processing') : 'Idle'
+    };
+
+    // 5. PDF Studio stats
+    const pdfSummary = summary.pdf || {};
+    const isPdfBusy = Boolean(this.concurrencyLock?.pdfJob?.isProcessing);
+    const pdfStats = {
+      engine: 'QPDF & Ghostscript',
+      totalProcessed: pdfSummary.completed || 0,
+      failed: pdfSummary.failed || 0,
+      totalJobs: pdfSummary.total || 0,
+      totalBytes: pdfSummary.totalBytes || 0,
+      totalProcessedSize: this.formatBytes(pdfSummary.totalBytes || 0),
+      avgProcessingTimeSeconds: pdfSummary.avgDurationMs ? parseFloat((pdfSummary.avgDurationMs / 1000).toFixed(1)) : 0,
+      isProcessing: isPdfBusy,
+      currentTool: isPdfBusy ? (this.concurrencyLock?.pdfJob?.tool || 'processing') : 'Idle'
+    };
+
+    // 6. Storage stats (cached for 15s)
     if (!this._cachedStorageStats || (now - this._storageCacheTime > 15000)) {
       this._cachedStorageStats = this.cleanup.getStorageStats();
       this._storageCacheTime = now;
@@ -96,6 +131,8 @@ class AnalyticsService {
       server: serverStats,
       processing: processingStats,
       ffmpeg: ffmpegStats,
+      image: imageStats,
+      pdf: pdfStats,
       storage: this._cachedStorageStats
     };
   }

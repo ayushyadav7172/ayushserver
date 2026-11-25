@@ -328,7 +328,53 @@
     const mediaSizeEl = document.getElementById('metricTotalMediaSize');
     if (mediaSizeEl && data.processing) mediaSizeEl.textContent = data.processing.totalProcessedMediaSize || '0 B';
 
-    // 5. Storage Panel
+    // 5. Image Studio Metrics Panel
+    const imgBadge = document.getElementById('badgeImageStatus');
+    if (imgBadge && data.image) {
+      if (data.image.isProcessing) {
+        imgBadge.className = 'status-badge status-warning';
+        imgBadge.textContent = `Active (${data.image.currentOperation || 'processing'})`;
+      } else {
+        imgBadge.className = 'status-badge status-healthy';
+        imgBadge.textContent = 'Idle';
+      }
+    }
+    const imgCompEl = document.getElementById('metricImageCompleted');
+    if (imgCompEl && data.image) imgCompEl.textContent = data.image.totalProcessed || 0;
+
+    const imgFailEl = document.getElementById('metricImageFailed');
+    if (imgFailEl && data.image) imgFailEl.textContent = data.image.failed || 0;
+
+    const imgAvgDurEl = document.getElementById('metricImageAvgDuration');
+    if (imgAvgDurEl && data.image) imgAvgDurEl.textContent = `${data.image.avgProcessingTimeSeconds || 0}s`;
+
+    const imgSizeEl = document.getElementById('metricImageTotalSize');
+    if (imgSizeEl && data.image) imgSizeEl.textContent = data.image.totalProcessedSize || '0 B';
+
+    // 6. PDF Studio Metrics Panel
+    const pdfBadge = document.getElementById('badgePdfStatus');
+    if (pdfBadge && data.pdf) {
+      if (data.pdf.isProcessing) {
+        pdfBadge.className = 'status-badge status-warning';
+        pdfBadge.textContent = `Active (${data.pdf.currentTool || 'processing'})`;
+      } else {
+        pdfBadge.className = 'status-badge status-healthy';
+        pdfBadge.textContent = 'Idle';
+      }
+    }
+    const pdfCompEl = document.getElementById('metricPdfCompleted');
+    if (pdfCompEl && data.pdf) pdfCompEl.textContent = data.pdf.totalProcessed || 0;
+
+    const pdfFailEl = document.getElementById('metricPdfFailed');
+    if (pdfFailEl && data.pdf) pdfFailEl.textContent = data.pdf.failed || 0;
+
+    const pdfAvgDurEl = document.getElementById('metricPdfAvgDuration');
+    if (pdfAvgDurEl && data.pdf) pdfAvgDurEl.textContent = `${data.pdf.avgProcessingTimeSeconds || 0}s`;
+
+    const pdfSizeEl = document.getElementById('metricPdfTotalSize');
+    if (pdfSizeEl && data.pdf) pdfSizeEl.textContent = data.pdf.totalProcessedSize || '0 B';
+
+    // 7. Storage Panel
     const appStorageBadge = document.getElementById('appStorageBadge');
     if (appStorageBadge && data.storage?.totalAppStorage) {
       appStorageBadge.textContent = `${data.storage.totalAppStorage.formatted} used`;

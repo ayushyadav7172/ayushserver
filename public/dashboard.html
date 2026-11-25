@@ -201,8 +201,71 @@
       </div>
     </div>
 
+    <!-- Multi-Panel Sections: Image & PDF Studio -->
     <div class="section-grid">
-      <!-- Panel 3: Storage Breakdown -->
+      <!-- Panel 3: Image Studio Analytics -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <h2>Image Studio Analytics</h2>
+          <span id="badgeImageStatus" class="status-badge status-healthy">Idle</span>
+        </div>
+        <div class="metrics-list">
+          <div class="metric-item">
+            <span class="metric-label">Processing Engine</span>
+            <span class="metric-value">Sharp (libvips)</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Processed Images</span>
+            <span id="metricImageCompleted" class="metric-value">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Failed Images</span>
+            <span id="metricImageFailed" class="metric-value">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Avg Processing Time</span>
+            <span id="metricImageAvgDuration" class="metric-value">0s</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Total Processed Image Size</span>
+            <span id="metricImageTotalSize" class="metric-value">0 B</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 4: PDF Studio Analytics -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <h2>PDF Studio Analytics</h2>
+          <span id="badgePdfStatus" class="status-badge status-healthy">Idle</span>
+        </div>
+        <div class="metrics-list">
+          <div class="metric-item">
+            <span class="metric-label">Processing Engines</span>
+            <span class="metric-value">QPDF &amp; Ghostscript</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Processed Documents</span>
+            <span id="metricPdfCompleted" class="metric-value">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Failed Operations</span>
+            <span id="metricPdfFailed" class="metric-value">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Avg Processing Time</span>
+            <span id="metricPdfAvgDuration" class="metric-value">0s</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Total Processed PDF Size</span>
+            <span id="metricPdfTotalSize" class="metric-value">0 B</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-grid">
+      <!-- Panel 5: Storage Breakdown -->
       <div class="panel-card">
         <div class="panel-header">
           <h2>Application Storage Footprint</h2>
