@@ -96,6 +96,37 @@ function createPdfRouter(deps) {
 
   const router = express.Router();
 
+  router.use((req, res, next) => {
+    if (req.user && req.user.role === 'guest') {
+      const pathsToCheck = [];
+      if (req.query && req.query.path) pathsToCheck.push(req.query.path);
+      if (req.body) {
+        if (req.body.path) pathsToCheck.push(req.body.path);
+        if (req.body.sourcePath) pathsToCheck.push(req.body.sourcePath);
+        if (Array.isArray(req.body.inputPaths)) pathsToCheck.push(...req.body.inputPaths);
+        if (Array.isArray(req.body.files)) {
+          for (const f of req.body.files) {
+            if (f && f.path) pathsToCheck.push(f.path);
+          }
+        }
+      }
+      for (const p of pathsToCheck) {
+        if (typeof p === 'string' && p.trim()) {
+          const abs = path.resolve(p.trim());
+          const inUploads = abs === EFFECTIVE_TEMP_DIR || !path.relative(EFFECTIVE_TEMP_DIR, abs).startsWith('..');
+          const inProcessed = abs === EFFECTIVE_OUTPUT_DIR || !path.relative(EFFECTIVE_OUTPUT_DIR, abs).startsWith('..');
+          if (!inUploads && !inProcessed) {
+            return res.status(403).json({
+              success: false,
+              error: 'Access denied: Guests cannot access or process PDF files from local server storage.'
+            });
+          }
+        }
+      }
+    }
+    next();
+  });
+
   const upload = fileUpload({
     useTempFiles: true,
     tempFileDir: EFFECTIVE_TEMP_DIR,

@@ -443,6 +443,10 @@ function setupStorageModeAndUpload() {
       showToast('A media conversion is currently running. Please wait for it to finish or stop it before switching modes.', 'warning');
       return;
     }
+    if (mode === 'local' && window.currentUser && window.currentUser.role === 'guest') {
+      showToast('Local phone storage is locked in Guest mode. Please sign in as Admin.', 'warning');
+      return;
+    }
     if (mode === 'remote') {
       if (btnMediaModeLocal) btnMediaModeLocal.classList.remove('active');
       if (btnMediaModeRemote) btnMediaModeRemote.classList.add('active');

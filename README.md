@@ -5,22 +5,25 @@
   <img src="https://img.shields.io/badge/Node.js-v20%2B-green?logo=node.js&logoColor=white" alt="Node.js">
   <img src="https://img.shields.io/badge/FFmpeg-Ready-red?logo=ffmpeg&logoColor=white" alt="FFmpeg">
   <img src="https://img.shields.io/badge/Database-SQLite%20WAL-lightgrey?logo=sqlite&logoColor=white" alt="SQLite">
-  <img src="https://img.shields.io/badge/Tests-51%20Passed-brightgreen?logo=checkmarx&logoColor=white" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-89%20Passed-brightgreen?logo=checkmarx&logoColor=white" alt="Tests">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
 </p>
 
 A high-performance, self-hosted, offline-first media and document studio built natively for **Android via Termux**. 
 
-AyushServer turns your Android smartphone into a personal media workstation. It provides a modern, responsive web dashboard with direct access to internal phone storage (`/sdcard`), real-time Server-Sent Events (SSE) progress streaming, an intelligent FFmpeg background queue, and zero-RAM-buffering pipelines capable of processing 3GB+ files without memory pressure.
+AyushServer turns your Android smartphone into a personal media workstation. It provides a modern, responsive web dashboard with direct access to internal phone storage (`/sdcard`), real-time Server-Sent Events (SSE) progress streaming, an intelligent FFmpeg background queue, zero-RAM-buffering pipelines capable of processing 3GB+ files without memory pressure, and a production-grade **Authentication & Role-Based Access Control (RBAC)** system.
 
 ---
 
 ## 🌟 Key Engineering Highlights
 
+* **Role-Based Access Control (RBAC):** Multi-tier access management separating Master Admin privileges (phone storage browsing, direct-path jobs, diagnostics) from Guest users (restricted strictly to temporary upload sandboxes).
 * **Direct Storage Mode (Zero Disk Duplication):** Browse `/sdcard`, `Download`, `DCIM`, `Movies`, and `Music` directly through the server-side file explorer. Output files are written in-place with zero intermediary cache waste.
 * **Stream-Based Processing:** Files are piped directly through streams and child processes, preventing Node.js buffer exhaustion and Out-Of-Memory (OOM) crashes on Android.
 * **Intelligent Concurrency Queue:** Background worker queue manages concurrent FFmpeg operations with real-time speed calculation, ETA estimation, and graceful cancellation.
-* **SQLite Persistence (WAL Mode):** Complete job history, system analytics, and runtime configurations persist safely across server restarts using a high-concurrency SQLite storage engine.
+* **SQLite Persistence (WAL Mode):** Complete job history, user accounts, auth sessions, system analytics, and runtime configurations persist safely across server restarts using a high-concurrency SQLite storage engine.
+* **1-Hour Auto-Logout & Session Security:** Sessions expire after 1 hour (3600 seconds) of inactivity or max age. Passwords are cryptographically salted and hashed using `crypto.scryptSync`.
+* **Terminal Admin Recovery Tool:** Zero insecure web backdoors. Forgotten credentials can be reset directly from the Termux terminal using `npm run reset-admin`.
 * **Android Wake-Lock Integration:** Automatically requests Termux CPU wake-lock during heavy FFmpeg or PDF operations and releases it immediately upon completion to conserve battery.
 * **Multi-Network Connectivity:** Native support for Localhost, local Wi-Fi / LAN, Android Hotspot (`ap0`), and Cellular Mobile Carrier networks (`ccmni` CGNAT IPv4/IPv6).
 * **Zero External Dependencies / 100% Offline:** Fully self-contained UI with bundled vanilla CSS/JS. No external CDNs or internet access required.
@@ -69,39 +72,134 @@ Comprehensive document utilities powered by `qpdf`, `ghostscript`, and `poppler`
 
 ---
 
+## 🔐 Authentication, Roles & Security Access Control
+
+AyushServer includes an authentication system designed to protect personal phone storage while allowing guests on the local network to process media.
+
+### 1. First-Time Admin Setup (Initialization)
+* When AyushServer is started for the first time with an uninitialized database, visiting `/login` automatically presents the **"Create Admin Account (Initial Setup)"** form.
+* Once the master administrator registers, the setup form is **permanently disabled and hidden**.
+* Any subsequent attempts to call `/api/auth/register-admin` are strictly rejected with **HTTP 403 Forbidden**.
+
+### 2. Admin vs. Guest Roles
+
+| Capability / Resource | 🛡️ Admin User | 👤 Guest User |
+| :--- | :---: | :---: |
+| **Browse Phone Storage (`/sdcard`)** | ✅ Full Access | ❌ **Locked (403 Forbidden)** |
+| **Direct Path Jobs (`/api/process-direct`)** | ✅ Any allowed path | ❌ **Locked (Uploads Only)** |
+| **Stream / Preview Phone Files** | ✅ Full Access | ❌ **Locked (403 Forbidden)** |
+| **Remote Upload Processing** | ✅ Yes | ✅ Yes (Isolated Sandbox) |
+| **Media, Image & PDF Tools** | ✅ Full Access | ✅ Allowed via Uploads |
+| **Diagnostics Dashboard (`/dashboard`)** | ✅ Full Access | ❌ **Access Denied (403)** |
+| **Backups & Cleanup Controls** | ✅ Full Access | ❌ **Locked (403 Forbidden)** |
+| **Session Lifetime** | ⏱️ 1 Hour (Auto-logout) | ⏱️ 1 Hour |
+
+> [!IMPORTANT]
+> **Zero Frontend-Only Security:** Guest restrictions are enforced on the backend. Even if a guest attempts to manipulate DOM buttons or send direct `curl` requests to `/api/browse`, `/api/process-direct`, or `/api/stream-file`, the server rejects the request with HTTP 403 Forbidden.
+
+### 3. 1-Hour Auto-Logout
+* Sessions expire automatically after **1 hour (3600 seconds)** of inactivity.
+* When the session expires, the browser client displays a notification and redirects to `/login?expired=1`.
+* Expired sessions are purged from the database automatically.
+
+---
+
+## 🔑 Admin Password Recovery (Terminal CLI)
+
+To prevent web-based brute-force attacks and credential harvesting, AyushServer **does not expose a web "Forgot Password" button**. Instead, recovery is performed exclusively through the local Termux terminal, ensuring that only the physical owner of the device can reset credentials.
+
+### Interactive Recovery Menu
+
+Run the recovery script in Termux:
+
+```bash
+npm run reset-admin
+```
+*(or `node scripts/reset-admin.js`)*
+
+This displays an interactive terminal menu:
+
+```text
+======================================================
+       🛡️  AyushServer - Admin Account Recovery       
+======================================================
+
+Current Admin Account(s):
+ [1] Username: "admin" (Created: 26/11/2026)
+
+Select an action:
+ [1] Set a new password for an existing admin
+ [2] Change admin username & password
+ [3] Complete Reset (Delete admin to show initial setup on web again)
+ [4] Exit
+
+Enter choice (1-4):
+```
+
+### Direct CLI Commands (Quick Flags)
+
+* **Update password for existing admin:**
+  ```bash
+  node scripts/reset-admin.js --password <newPassword>
+  ```
+* **Change both username and password:**
+  ```bash
+  node scripts/reset-admin.js --username <newUsername> --password <newPassword>
+  ```
+* **Complete Reset (Re-opens initial web setup):**
+  ```bash
+  node scripts/reset-admin.js --reset
+  ```
+* **Check admin status:**
+  ```bash
+  node scripts/reset-admin.js --status
+  ```
+
+---
+
 ## 🏗️ Architecture & Technology Stack
 
 ```text
 ayushserver/
-├── server.js               # Express application, API routes, SSE streaming, file explorer
+├── server.js               # Express app, RBAC auth middleware, SSE streaming, file explorer
 ├── pdf-routes.js           # PDF processing router (qpdf, poppler, ghostscript)
 ├── nodemon.json            # Development auto-reload configuration
-├── package.json            # Project manifest & dependencies
+├── package.json            # Project manifest, dependencies & scripts
 ├── setup.sh                # Automated alias and environment setup script
 ├── start.sh                # Production launcher script
 ├── database/
-│   ├── database.js         # SQLite manager with WAL mode & automated schema migrations
-│   └── migrations/         # Database schema definitions
+│   ├── database.js         # SQLite manager (WAL mode, auth queries, prepared statements)
+│   └── migrations/
+│       ├── 001_initial_schema.js  # Jobs, logs, analytics, backups schema
+│       └── 002_auth_schema.js    # Users and auth_sessions schema
+├── scripts/
+│   └── reset-admin.js      # Terminal CLI tool for admin password reset & recovery
 ├── services/
+│   ├── analytics-service.js# Metrics aggregation service
 │   ├── backup-manager.js   # Automated SQLite database backups
 │   ├── cleanup-manager.js  # Scheduled storage cleanup & retention policies
+│   ├── health-monitor.js   # System diagnostic monitor
+│   ├── job-manager.js      # SQLite job lifecycle coordinator
 │   ├── network-monitor.js  # Multi-interface detection (wlan0, ap0, ccmni)
 │   ├── path-safety.js      # Canonical path traversal & allowlist guards
 │   ├── queue-manager.js    # Centralized FFmpeg concurrency queue
 │   └── wake-lock.js        # Termux battery & CPU wake-lock manager
 ├── public/                 # Vanilla JS / CSS dark-themed frontend studios
+│   ├── login.html          # Dynamic Admin Setup & Login / Guest portal
+│   ├── login.js            # Authentication UI handler & session initializer
+│   ├── auth.js             # Shared client guard (auto-logout, guest storage lock)
 │   ├── home.html           # Main studio navigation launchpad
 │   ├── media.html          # Video & audio processing interface
 │   ├── image.html          # Sharp-powered image manipulation studio
 │   ├── pdf.html            # Document manipulation studio
 │   ├── dashboard.html      # System health, analytics & queue monitor
-│   └── *.css, *.js         # Studio logic, style sheets, and real-time SSE handlers
+│   └── *.css, *.js         # Studio logic, stylesheets, and real-time SSE handlers
 ├── docs/
 │   ├── openapi.yaml        # Complete OpenAPI 3.1 REST API specification
 │   └── SECURITY_REPORT.md  # Comprehensive security audit report
 └── tests/
-    ├── unit/               # Fast, isolated unit test suites
-    └── integration/        # End-to-end API and multi-GB media lifecycle tests
+    ├── unit/               # Unit test suites (auth-security, network, queue, db, etc.)
+    └── integration/        # End-to-end API, server, and multi-GB media lifecycle tests
 ```
 
 ---
@@ -164,7 +262,7 @@ npm start
 ```
 
 ### Development Mode (Hot Reload)
-Automatically reloads the server when code files are modified and saved:
+Automatically reloads the server when code files are modified:
 ```bash
 npm run dev
 ```
@@ -172,13 +270,14 @@ npm run dev
 ### Accessing the Web Studio
 Once started, open your web browser (Chrome, Firefox, Kiwi) on your phone or any device connected to the same Wi-Fi network:
 
-| Destination | Local URL | Description |
-| :--- | :--- | :--- |
-| **Home Portal** | `http://localhost:3000/` | Central launchpad with studio navigation |
-| **Media Studio** | `http://localhost:3000/media` | Video/Audio converters, extractors, and trimmers |
-| **Image Studio** | `http://localhost:3000/image` | Sharp-powered format conversion & optimization |
-| **PDF Studio** | `http://localhost:3000/pdf` | PDF merging, splitting, and compression |
-| **Dashboard** | `http://localhost:3000/dashboard` | Live CPU/RAM charts, queue control, and logs |
+| Destination | Local URL | Access Level | Description |
+| :--- | :--- | :---: | :--- |
+| **Login / Setup** | `http://localhost:3000/login` | Public | Initial admin creation or sign-in / Guest choice |
+| **Home Portal** | `http://localhost:3000/` | Auth Required | Central launchpad with studio navigation |
+| **Media Studio** | `http://localhost:3000/media` | Auth Required | Video/Audio converters, extractors, and trimmers |
+| **Image Studio** | `http://localhost:3000/image` | Auth Required | Sharp-powered format conversion & optimization |
+| **PDF Studio** | `http://localhost:3000/pdf` | Auth Required | PDF merging, splitting, and compression |
+| **Dashboard** | `http://localhost:3000/dashboard` | 🛡️ **Admin Only** | Live CPU/RAM charts, queue control, and logs |
 
 > [!TIP]
 > To access the server from a computer or tablet on the same Wi-Fi, replace `localhost` with your phone's Wi-Fi IP address (displayed in the Termux console upon server start, e.g. `http://192.168.1.15:3000`).
@@ -190,7 +289,7 @@ Once started, open your web browser (Chrome, Firefox, Kiwi) on your phone or any
 AyushServer includes a comprehensive test suite written with the native Node.js test runner (`node:test`):
 
 ```bash
-# Run all unit and integration tests (51 tests)
+# Run all unit, security, and integration tests (89 tests)
 npm test
 
 # Run all test suites including heavy integration
@@ -200,7 +299,10 @@ npm run test:all
 npm run test:3gb
 ```
 
-All 51 tests run and pass without external mock frameworks:
+All 89 tests run and pass without external mock frameworks:
+* ✅ Authentication, Scrypt hashing, and session expiration
+* ✅ Guest bypass attacks (phone storage, custom commands, streaming) blocked (403)
+* ✅ Initial admin setup closure & privilege escalation blocked
 * ✅ Server & Health API probes
 * ✅ Concurrency queue limits & priority scheduling
 * ✅ Path traversal and double-encoding security checks
@@ -212,24 +314,30 @@ All 51 tests run and pass without external mock frameworks:
 
 ## 🔒 Security & Privacy
 
-* **Zero Authentication on LAN:** Designed for private Android LAN/hotspot usage without annoying token dialogs or key expiry.
-* **Multi-Iteration Path Guard:** Traversal attempts (`../`, `%252e%252e`, root escapes) are strictly rejected with HTTP 403.
-* **Storage Allowlist:** File operations are strictly bound to `/sdcard`, `/storage`, and the Termux home directory. System root `/` access is completely blocked.
-* **Full Security Audit:** See [docs/SECURITY_REPORT.md](docs/SECURITY_REPORT.md) for details.
+* **Zero Plaintext Credentials:** Passwords are salted with 16 cryptographically random bytes and hashed using `crypto.scryptSync`.
+* **Database Isolation:** Database files (`database/*.db*`) are excluded in `.gitignore` and never committed or pushed to Git repositories.
+* **Storage Allowlist & Confinement:** File operations are strictly bound to `/sdcard`, `/storage`, and the Termux home directory. System root `/` access is completely blocked.
+* **Multi-Iteration Path Guard:** Traversal attempts (`../`, `%252e%252e`, null bytes, symlink loops) are strictly canonicalized and rejected with HTTP 403.
+* **Full Security Verification:** See [tests/unit/auth-security.test.js](tests/unit/auth-security.test.js) for automated bypass test cases.
 
 ---
 
 ## 📖 API Documentation
 
-Complete REST API documentation is available via the OpenAPI 3.1 specification:
+Complete REST API documentation is available via OpenAPI 3.1:
 * **OpenAPI File:** [`docs/openapi.yaml`](docs/openapi.yaml)
-* **Status Endpoints:**
+* **Authentication Endpoints:**
+  * `GET /api/auth/status` — Current session status, role, and expiration timestamp.
+  * `POST /api/auth/register-admin` — Initial admin registration (locked once configured).
+  * `POST /api/auth/login` — Administrator credential authentication.
+  * `POST /api/auth/guest` — Start temporary guest session (local storage locked).
+  * `POST /api/auth/logout` — Terminate session and invalidate token.
+* **Core Endpoints:**
   * `GET /api/health` — Full system status (Memory, FFmpeg, SQLite, Queue, Storage).
-  * `GET /api/health/live` & `GET /api/health/ready` — Lightweight health probes.
   * `GET /api/analytics/stats` — Real-time performance metrics.
   * `GET /api/queue/status` — Active and waiting job queue status.
-  * `POST /api/queue/concurrency` — Adjust maximum concurrent FFmpeg workers.
-  * `GET /api/browse?path=/sdcard` — Safe phone storage directory explorer.
+  * `POST /api/queue/concurrency` — Adjust maximum concurrent FFmpeg workers (Admin only).
+  * `GET /api/browse?dir=/sdcard` — Safe phone storage directory explorer (Admin only).
   * `POST /api/process-direct` — Submit video/audio processing jobs.
   * `POST /api/cancel-job` — Gracefully stop active or queued tasks.
 
@@ -250,4 +358,3 @@ This project is built upon and makes use of the following open-source tools and 
 * **[PDF-lib](https://pdf-lib.js.org/)** — JavaScript library for PDF document generation and modification.
 * **[QPDF](https://qpdf.sourceforge.io/) & [Poppler](https://poppler.freedesktop.org/)** — Robust CLI utilities for PDF manipulation and rendering.
 * **[Termux](https://termux.dev/)** — Powerful Android terminal emulation and Linux environment.
-

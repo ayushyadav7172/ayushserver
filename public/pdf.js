@@ -250,6 +250,10 @@
   }
 
   function setPdfStorageMode(mode) {
+    if (mode === 'local' && window.currentUser && window.currentUser.role === 'guest') {
+      showToast('Local phone storage is locked in Guest mode. Please sign in as Admin.', 'warning');
+      return;
+    }
     const isRemote = mode === 'remote';
     if (isRemote) {
       $('btnPdfModeLocal')?.classList.remove('active');

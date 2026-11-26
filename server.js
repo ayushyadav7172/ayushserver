@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const os = require('os');
 const sharp = require('sharp');
 const multer = require('multer');
+const cookieParser = require('cookie-parser');
 const { createPdfRouter } = require('./pdf-routes');
 const { wakeLockManager } = require('./wake-lock');
 const { databaseManager } = require('./database/database');
@@ -134,6 +135,17 @@ function isPathWithinRoot(candidate, root) {
   if (candidate === root) return true;
   const rel = path.relative(root, candidate);
   return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+}
+
+function isPathInside(childPath, parentDir) {
+  if (!childPath || !parentDir) return false;
+  try {
+    const canonicalChild = canonicalizeTarget(childPath) || path.resolve(childPath);
+    const canonicalParent = canonicalizeTarget(parentDir) || path.resolve(parentDir);
+    return isPathWithinRoot(canonicalChild, canonicalParent);
+  } catch (e) {
+    return false;
+  }
 }
 
 function isPathAllowed(targetPath) {
@@ -276,7 +288,9 @@ const corsOptions = {
     'Accept',
     'Authorization',
     'Cache-Control',
-    'X-Requested-With'
+    'X-Requested-With',
+    'X-Auth-Token',
+    'X-Admin-Token'
   ],
   exposedHeaders: [
     'Content-Range',
@@ -299,14 +313,79 @@ app.use((req, res, next) => {
   next();
 });
 
+// ======================== AUTHENTICATION & ACCESS CONTROL ========================
+const AUTH_COOKIE_NAME = 'ayush_auth_token';
+const AUTH_SESSION_MAX_AGE_MS = 60 * 60 * 1000; // 1-hour session timeout
+
+function hashPassword(password, salt) {
+  return crypto.scryptSync(password, salt, 64).toString('hex');
+}
+
+function verifyPassword(password, hash, salt) {
+  try {
+    const computed = crypto.scryptSync(password, salt, 64).toString('hex');
+    return crypto.timingSafeEqual(Buffer.from(computed, 'hex'), Buffer.from(hash, 'hex'));
+  } catch (e) {
+    return false;
+  }
+}
+
+function extractAuthToken(req) {
+  if (req.cookies && req.cookies[AUTH_COOKIE_NAME]) {
+    return req.cookies[AUTH_COOKIE_NAME];
+  }
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+  if (req.headers['x-auth-token']) {
+    return String(req.headers['x-auth-token']).trim();
+  }
+  if (req.query && req.query.authToken) {
+    return String(req.query.authToken).trim();
+  }
+  return null;
+}
+
+function authMiddleware(req, res, next) {
+  const token = extractAuthToken(req);
+  if (token) {
+    const session = databaseManager.getAuthSession(token);
+    if (session) {
+      req.authSession = session;
+      req.user = {
+        userId: session.user_id,
+        username: session.username,
+        role: session.role
+      };
+      // Touch session to slide 1-hour inactivity expiration window
+      databaseManager.touchAuthSession(token, AUTH_SESSION_MAX_AGE_MS);
+    }
+  }
+  next();
+}
+
+// Periodic cleanup of expired auth sessions (every 15 minutes)
+setInterval(() => {
+  try {
+    databaseManager.cleanupExpiredSessions();
+  } catch (e) {}
+}, 15 * 60 * 1000).unref();
+
 // Middleware
 app.use(morgan('dev'));
+app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use(authMiddleware);
 app.use(express.static(PUBLIC_DIR, { index: false }));
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'home.html'));
+});
+
+app.get(['/login', '/login/', '/login.html'], (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'login.html'));
 });
 
 app.get(['/media', '/media/', '/media.html'], (req, res) => {
@@ -326,6 +405,9 @@ app.get('/index.html', (req, res) => {
 });
 
 app.get(['/dashboard', '/dashboard/', '/dashboard.html'], (req, res) => {
+  if (databaseManager.hasAnyAdmin() && req.user && req.user.role === 'guest') {
+    return res.status(403).send('Access denied: Dashboard requires Admin access.');
+  }
   res.sendFile(path.join(PUBLIC_DIR, 'dashboard.html'));
 });
 
@@ -3328,6 +3410,28 @@ async function processImageFile(inputPath, normalized) {
 
 const imageRouter = express.Router();
 
+imageRouter.use((req, res, next) => {
+  if (req.user && req.user.role === 'guest') {
+    const rawPaths = [];
+    if (req.query && req.query.path) rawPaths.push(req.query.path);
+    if (req.body) {
+      if (req.body.path) rawPaths.push(req.body.path);
+      if (Array.isArray(req.body.paths)) rawPaths.push(...req.body.paths);
+      if (req.body.inputPath) rawPaths.push(req.body.inputPath);
+      if (Array.isArray(req.body.inputPaths)) rawPaths.push(...req.body.inputPaths);
+    }
+    for (const p of rawPaths) {
+      if (p && !isPathInside(p, UPLOADS_DIR) && !isPathInside(p, PROCESSED_DIR)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied: Guests cannot access or process images from local server storage.'
+        });
+      }
+    }
+  }
+  next();
+});
+
 const imageAsyncRoute = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
@@ -3512,6 +3616,184 @@ imageRouter.post('/process', imageAsyncRoute(async (req, res) => {
 
 app.use('/api/image', imageRouter);
 
+// ==================== AUTHENTICATION & ACCESS CONTROL API ====================
+
+// GET /api/auth/status
+app.get('/api/auth/status', (req, res) => {
+  try {
+    const hasAdmin = databaseManager.hasAnyAdmin();
+    const authenticated = Boolean(req.user);
+    res.json({
+      success: true,
+      hasAdmin,
+      authenticated,
+      user: req.user || null,
+      expiresAt: req.authSession ? req.authSession.expires_at : null
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/auth/register-admin
+app.post('/api/auth/register-admin', (req, res) => {
+  try {
+    if (databaseManager.hasAnyAdmin()) {
+      return res.status(403).json({
+        success: false,
+        error: 'Registration is closed. An admin account has already been registered.'
+      });
+    }
+
+    const { username, password } = req.body || {};
+    if (!username || typeof username !== 'string' || username.trim().length < 3) {
+      return res.status(400).json({
+        success: false,
+        error: 'Username must be at least 3 characters long.'
+      });
+    }
+    if (!password || typeof password !== 'string' || password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: 'Password must be at least 6 characters long.'
+      });
+    }
+
+    const cleanUsername = username.trim();
+    const salt = crypto.randomBytes(16).toString('hex');
+    const passwordHash = hashPassword(password, salt);
+
+    const user = databaseManager.createUser({
+      username: cleanUsername,
+      passwordHash,
+      salt,
+      role: 'admin'
+    });
+
+    const session = databaseManager.createAuthSession({
+      userId: user.id,
+      username: user.username,
+      role: 'admin',
+      maxAgeMs: AUTH_SESSION_MAX_AGE_MS
+    });
+
+    res.cookie(AUTH_COOKIE_NAME, session.token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: AUTH_SESSION_MAX_AGE_MS,
+      path: '/'
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Admin account created successfully.',
+      token: session.token,
+      user: { id: user.id, username: user.username, role: 'admin' },
+      expiresAt: session.expires_at
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/auth/login
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password || typeof username !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Username and password are required.'
+      });
+    }
+
+    const user = databaseManager.getUserByUsername(username.trim());
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid username or password.'
+      });
+    }
+
+    const valid = verifyPassword(password, user.password_hash, user.salt);
+    if (!valid) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid username or password.'
+      });
+    }
+
+    databaseManager.updateUserLastLogin(user.id);
+    const session = databaseManager.createAuthSession({
+      userId: user.id,
+      username: user.username,
+      role: user.role,
+      maxAgeMs: AUTH_SESSION_MAX_AGE_MS
+    });
+
+    res.cookie(AUTH_COOKIE_NAME, session.token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: AUTH_SESSION_MAX_AGE_MS,
+      path: '/'
+    });
+
+    res.json({
+      success: true,
+      message: 'Login successful.',
+      token: session.token,
+      user: { id: user.id, username: user.username, role: user.role },
+      expiresAt: session.expires_at
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/auth/guest
+app.post('/api/auth/guest', (req, res) => {
+  try {
+    const guestUsername = 'guest_' + crypto.randomBytes(3).toString('hex');
+    const session = databaseManager.createAuthSession({
+      userId: null,
+      username: guestUsername,
+      role: 'guest',
+      maxAgeMs: AUTH_SESSION_MAX_AGE_MS
+    });
+
+    res.cookie(AUTH_COOKIE_NAME, session.token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: AUTH_SESSION_MAX_AGE_MS,
+      path: '/'
+    });
+
+    res.json({
+      success: true,
+      message: 'Guest session started. Local storage is restricted.',
+      token: session.token,
+      user: { username: guestUsername, role: 'guest' },
+      expiresAt: session.expires_at
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/auth/logout
+app.post('/api/auth/logout', (req, res) => {
+  try {
+    const token = extractAuthToken(req);
+    if (token) {
+      databaseManager.deleteAuthSession(token);
+    }
+    res.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
+    res.json({ success: true, message: 'Logged out successfully.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 1. Current Active Job State (For browser refresh / state restore)
 // GET /api/current-job
 app.get('/api/current-job', (req, res) => {
@@ -3668,6 +3950,9 @@ app.get('/api/download/:filename', (req, res) => {
 
     // Direct-path support: Allow downloading output files explicitly located within allowed roots
     if (!foundPath && req.query.path) {
+      if (req.user && req.user.role === 'guest') {
+        return res.status(403).send('Access denied: Guests cannot download files from local server storage.');
+      }
       try {
         const queryPath = assertPathAllowed(req.query.path, 'Download file');
         if (fs.existsSync(queryPath) && fs.statSync(queryPath).isFile()) {
@@ -3721,7 +4006,7 @@ app.get('/api/info', (req, res) => {
 
 // 3. Server-Side File Explorer API
 // GET /api/browse?dir=/sdcard/
-app.get('/api/browse', (req, res) => {
+app.get('/api/browse', requireAdminAccess(), (req, res) => {
   try {
     const rawDir = (req.query.dir || req.query.path) ? String(req.query.dir || req.query.path).trim() : '/sdcard';
     const requestedKind = String(req.query.kind || 'media').toLowerCase();
@@ -3858,6 +4143,14 @@ app.get('/api/analyze-media', async (req, res) => {
     }
 
     const resolved = assertPathAllowed(String(rawPath).trim(), 'Media file');
+
+    if (req.user && req.user.role === 'guest') {
+      const isAllowedForGuest = isPathInside(resolved, UPLOADS_DIR) || isPathInside(resolved, PROCESSED_DIR);
+      if (!isAllowedForGuest) {
+        return res.status(403).json({ error: 'Access denied: Guests cannot inspect files from local server storage.' });
+      }
+    }
+
     if (!fs.existsSync(resolved)) {
       return res.status(404).json({ error: `File not found on storage: ${rawPath}` });
     }
@@ -3885,6 +4178,14 @@ app.post('/api/probe-file', async (req, res) => {
     }
 
     const resolved = assertPathAllowed(filePath, 'Media file');
+
+    if (req.user && req.user.role === 'guest') {
+      const isAllowedForGuest = isPathInside(resolved, UPLOADS_DIR) || isPathInside(resolved, PROCESSED_DIR);
+      if (!isAllowedForGuest) {
+        return res.status(403).json({ error: 'Access denied: Guests cannot probe files from local server storage.' });
+      }
+    }
+
     if (!fs.existsSync(resolved)) {
       return res.status(404).json({ error: `File not found: ${filePath}` });
     }
@@ -3982,6 +4283,14 @@ app.get('/api/get-thumbnail', async (req, res) => {
     const rawPath = req.query.path || req.query.filePath;
     if (!rawPath) return res.status(400).send('Missing path parameter');
     const resolvedPath = assertPathAllowed(String(rawPath).trim(), 'Media file');
+
+    if (req.user && req.user.role === 'guest') {
+      const isAllowedForGuest = isPathInside(resolvedPath, UPLOADS_DIR) || isPathInside(resolvedPath, PROCESSED_DIR);
+      if (!isAllowedForGuest) {
+        return res.status(403).send('Access denied: Guests cannot preview files from local server storage.');
+      }
+    }
+
     if (!fs.existsSync(resolvedPath)) {
       return res.status(404).send('File not found');
     }
@@ -4043,6 +4352,18 @@ app.post(['/api/process-direct', '/api/process-multi'], async (req, res) => {
     }
 
     resolvedPath = assertPathAllowed(filePath, 'Media file');
+
+    // Guest protection: Guests cannot process files from local server storage
+    if (req.user && req.user.role === 'guest') {
+      const isInsideUploads = isPathInside(resolvedPath, UPLOADS_DIR);
+      if (!isInsideUploads) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied: Guests cannot process files from local server storage. Please use Remote Upload mode.'
+        });
+      }
+    }
+
     if (!fs.existsSync(resolvedPath)) {
       return res.status(404).json({ error: `File not found on storage: ${filePath}` });
     }
@@ -4260,6 +4581,15 @@ app.post('/api/run-custom', async (req, res) => {
 
     if (filePath) {
       resolvedPath = assertPathAllowed(filePath, 'Media file');
+      if (req.user && req.user.role === 'guest') {
+        const isInsideUploads = isPathInside(resolvedPath, UPLOADS_DIR);
+        if (!isInsideUploads) {
+          return res.status(403).json({
+            success: false,
+            error: 'Access denied: Guests cannot process files from local server storage.'
+          });
+        }
+      }
       if (!fs.existsSync(resolvedPath)) {
         return res.status(404).json({ error: `File not found on storage: ${filePath}` });
       }
@@ -4580,7 +4910,18 @@ app.get('/api/stream-file', (req, res) => {
   }
 
   try {
-    if (!filePath || !fs.existsSync(filePath)) {
+    if (!filePath) {
+      return res.status(404).send('File not found');
+    }
+
+    if (req.user && req.user.role === 'guest') {
+      const isAllowedForGuest = isPathInside(filePath, UPLOADS_DIR) || isPathInside(filePath, PROCESSED_DIR);
+      if (!isAllowedForGuest) {
+        return res.status(403).send('Access denied: Guests cannot stream files from local server storage.');
+      }
+    }
+
+    if (!fs.existsSync(filePath)) {
       return res.status(404).send('File not found');
     }
 
@@ -4788,23 +5129,50 @@ function isTunneledRequest(req) {
 function requireAdminAccess(options = {}) {
   const { blockPublicTunnelWithoutToken = false } = options;
   return (req, res, next) => {
+    // 1. Session-authenticated Admin user
+    if (req.user && req.user.role === 'admin') {
+      return next();
+    }
+
+    // 2. Legacy / Tunnel ADMIN_TOKEN check
     const adminToken = process.env.ADMIN_TOKEN;
     if (adminToken) {
       const authHeader = String(req.headers.authorization || '');
       const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
       const headerToken = String(req.headers['x-admin-token'] || req.query?.adminToken || '').trim();
-      if (bearer !== adminToken && headerToken !== adminToken) {
-        return res.status(403).json({ success: false, error: 'Forbidden: Valid admin token required.' });
+      if (bearer === adminToken || headerToken === adminToken) {
+        req.user = { userId: 'env_admin', username: 'admin', role: 'admin' };
+        return next();
       }
-      return next();
+      return res.status(403).json({ success: false, error: 'Forbidden: Valid admin token required.' });
     }
+
+    // 3. Authenticated Guest: Strictly forbidden from administrative & local storage access
+    if (req.user && req.user.role === 'guest') {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied: Local server storage and administration are restricted to Admin.'
+      });
+    }
+
+    // 4. Block public tunnel without token if requested
     if (blockPublicTunnelWithoutToken && isTunneledRequest(req)) {
       return res.status(403).json({
         success: false,
         error: 'Forbidden: Destructive operation is disabled over public tunnels unless ADMIN_TOKEN is configured.'
       });
     }
-    return next();
+
+    // 5. If no admin account exists yet in DB, allow access (for initial setup & test suites)
+    if (!databaseManager.hasAnyAdmin()) {
+      return next();
+    }
+
+    // 6. Admin exists, but caller is unauthenticated
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required: Please log in with admin credentials.'
+    });
   };
 }
 

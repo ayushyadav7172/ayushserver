@@ -1685,6 +1685,10 @@
         showToast('Cannot switch storage modes while an operation is in progress.', 'warning');
         return;
       }
+      if (mode === 'local' && window.currentUser && window.currentUser.role === 'guest') {
+        showToast('Local phone storage is locked in Guest mode. Please sign in as Admin.', 'warning');
+        return;
+      }
       if (mode === 'remote') {
         $('btnImageModeLocal')?.classList.remove('active');
         $('btnImageModeRemote')?.classList.add('active');

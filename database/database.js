@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const DEFAULT_DB_DIR = path.join(__dirname);
@@ -166,6 +167,26 @@ class DatabaseManager {
     this.stmtGetBackups = this.db.prepare('SELECT * FROM backups_metadata ORDER BY created_at DESC');
     this.stmtGetBackupById = this.db.prepare('SELECT * FROM backups_metadata WHERE id = ?');
     this.stmtDeleteBackup = this.db.prepare('DELETE FROM backups_metadata WHERE id = ?');
+
+    // Auth & Users statements
+    this.stmtHasAdmin = this.db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'");
+    this.stmtInsertUser = this.db.prepare(`
+      INSERT INTO users (id, username, password_hash, salt, role, created_at, last_login)
+      VALUES (@id, @username, @password_hash, @salt, @role, @created_at, @last_login)
+    `);
+    this.stmtGetUserByUsername = this.db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE');
+    this.stmtGetUserById = this.db.prepare('SELECT * FROM users WHERE id = ?');
+    this.stmtUpdateUserLastLogin = this.db.prepare('UPDATE users SET last_login = ? WHERE id = ?');
+
+    // Sessions statements
+    this.stmtInsertSession = this.db.prepare(`
+      INSERT INTO auth_sessions (token, user_id, username, role, created_at, expires_at, last_active)
+      VALUES (@token, @user_id, @username, @role, @created_at, @expires_at, @last_active)
+    `);
+    this.stmtGetSession = this.db.prepare('SELECT * FROM auth_sessions WHERE token = ?');
+    this.stmtTouchSession = this.db.prepare('UPDATE auth_sessions SET last_active = ?, expires_at = ? WHERE token = ?');
+    this.stmtDeleteSession = this.db.prepare('DELETE FROM auth_sessions WHERE token = ?');
+    this.stmtDeleteExpiredSessions = this.db.prepare('DELETE FROM auth_sessions WHERE expires_at < ?');
   }
 
   // ==================== JOBS API ====================
@@ -547,6 +568,137 @@ class DatabaseManager {
   deleteBackup(id) {
     if (!this.db) this.init();
     return this.stmtDeleteBackup.run(String(id));
+  }
+
+  // ==================== AUTH & USER API ====================
+  hasAnyAdmin() {
+    if (!this.db) this.init();
+    const row = this.stmtHasAdmin.get();
+    return Boolean(row && row.count > 0);
+  }
+
+  createUser(userData) {
+    if (!this.db) this.init();
+    const record = {
+      id: userData.id || `usr_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+      username: String(userData.username).trim(),
+      password_hash: userData.passwordHash,
+      salt: userData.salt,
+      role: userData.role || 'admin',
+      created_at: userData.createdAt || Date.now(),
+      last_login: userData.lastLogin || null
+    };
+    this.stmtInsertUser.run(record);
+    return record;
+  }
+
+  getUserByUsername(username) {
+    if (!this.db) this.init();
+    if (!username) return null;
+    return this.stmtGetUserByUsername.get(String(username).trim()) || null;
+  }
+
+  getUserById(id) {
+    if (!this.db) this.init();
+    if (!id) return null;
+    return this.stmtGetUserById.get(String(id)) || null;
+  }
+
+  updateUserLastLogin(id) {
+    if (!this.db) this.init();
+    const now = Date.now();
+    this.stmtUpdateUserLastLogin.run(now, String(id));
+    return now;
+  }
+
+  createAuthSession(sessionData = {}) {
+    if (!this.db) this.init();
+    const now = Date.now();
+    const maxAgeMs = typeof sessionData.maxAgeMs === 'number' ? sessionData.maxAgeMs : 3600000; // 1 hour default
+    const record = {
+      token: sessionData.token || crypto.randomBytes(32).toString('hex'),
+      user_id: sessionData.userId ? String(sessionData.userId) : null,
+      username: sessionData.username || 'guest',
+      role: sessionData.role || 'guest',
+      created_at: now,
+      expires_at: now + maxAgeMs,
+      last_active: now
+    };
+    this.stmtInsertSession.run(record);
+    return record;
+  }
+
+  getAuthSession(token) {
+    if (!this.db) this.init();
+    if (!token) return null;
+    const session = this.stmtGetSession.get(String(token));
+    if (!session) return null;
+
+    const now = Date.now();
+    if (session.expires_at < now) {
+      this.stmtDeleteSession.run(session.token);
+      return null;
+    }
+    return session;
+  }
+
+  touchAuthSession(token, maxAgeMs = 3600000) {
+    if (!this.db) this.init();
+    if (!token) return false;
+    const now = Date.now();
+    const newExpiresAt = now + maxAgeMs;
+    const res = this.stmtTouchSession.run(now, newExpiresAt, String(token));
+    return res.changes > 0;
+  }
+
+  deleteAuthSession(token) {
+    if (!this.db) this.init();
+    if (!token) return false;
+    const res = this.stmtDeleteSession.run(String(token));
+    return res.changes > 0;
+  }
+
+  cleanupExpiredSessions() {
+    if (!this.db) this.init();
+    const now = Date.now();
+    const res = this.stmtDeleteExpiredSessions.run(now);
+    return res.changes || 0;
+  }
+
+  getAllAdmins() {
+    if (!this.db) this.init();
+    return this.db.prepare("SELECT id, username, created_at, last_login FROM users WHERE role = 'admin'").all();
+  }
+
+  resetAdminPassword(username, newPassword) {
+    if (!this.db) this.init();
+    const user = this.getUserByUsername(username);
+    if (!user) return false;
+    const salt = crypto.randomBytes(16).toString('hex');
+    const passwordHash = crypto.scryptSync(newPassword, salt, 64).toString('hex');
+    this.db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?')
+      .run(passwordHash, salt, user.id);
+    this.db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(user.id);
+    return true;
+  }
+
+  updateAdminCredentials(oldUsername, newUsername, newPassword) {
+    if (!this.db) this.init();
+    const user = this.getUserByUsername(oldUsername);
+    if (!user) return false;
+    const salt = crypto.randomBytes(16).toString('hex');
+    const passwordHash = crypto.scryptSync(newPassword, salt, 64).toString('hex');
+    this.db.prepare('UPDATE users SET username = ?, password_hash = ?, salt = ? WHERE id = ?')
+      .run(newUsername.trim(), passwordHash, salt, user.id);
+    this.db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(user.id);
+    return true;
+  }
+
+  clearAllAdmins() {
+    if (!this.db) this.init();
+    this.db.exec('DELETE FROM auth_sessions;');
+    const res = this.db.prepare("DELETE FROM users WHERE role = 'admin'").run();
+    return res.changes || 0;
   }
 
   close() {

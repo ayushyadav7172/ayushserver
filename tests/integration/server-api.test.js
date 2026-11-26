@@ -7,13 +7,25 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { app, cleanupManager, backupManager, queueManager } = require('../../server');
+const { databaseManager } = require('../../database/database');
 
 describe('API Integration: Server, Health, Analytics, Queue & Storage', () => {
   let server;
   let baseUrl;
   let testPort;
+  let adminCookie = '';
 
   before(async () => {
+    databaseManager.init();
+    if (databaseManager.hasAnyAdmin()) {
+      const session = databaseManager.createAuthSession({
+        userId: 'integration_test_admin',
+        username: 'admin',
+        role: 'admin'
+      });
+      adminCookie = `ayush_auth_token=${session.token}`;
+    }
+
     server = http.createServer(app);
     await new Promise((resolve) => {
       server.listen(0, '127.0.0.1', () => {
@@ -38,17 +50,19 @@ describe('API Integration: Server, Health, Analytics, Queue & Storage', () => {
   });
 
   async function apiGet(route) {
-    const res = await fetch(`${baseUrl}${route}`, {
-      headers: { 'Connection': 'close' }
-    });
+    const headers = { 'Connection': 'close' };
+    if (adminCookie) headers['Cookie'] = adminCookie;
+    const res = await fetch(`${baseUrl}${route}`, { headers });
     const data = await res.json().catch(() => null);
     return { status: res.status, headers: res.headers, data };
   }
 
   async function apiPost(route, body = {}) {
+    const headers = { 'Content-Type': 'application/json', 'Connection': 'close' };
+    if (adminCookie) headers['Cookie'] = adminCookie;
     const res = await fetch(`${baseUrl}${route}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Connection': 'close' },
+      headers,
       body: JSON.stringify(body)
     });
     const data = await res.json().catch(() => null);

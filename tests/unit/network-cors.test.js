@@ -4,12 +4,24 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
 const { app, isOriginAllowed, getLocalIP, getNetworkInterfacesSummary } = require('../../server');
+const { databaseManager } = require('../../database/database');
 
 describe('Network & CORS Validation: Cellular (ccmni), Hotspot (ap0), LAN & IPv6', () => {
   let server;
   let baseUrl;
+  let adminCookie = '';
 
   before(async () => {
+    databaseManager.init();
+    if (databaseManager.hasAnyAdmin()) {
+      const session = databaseManager.createAuthSession({
+        userId: 'cors_test_admin',
+        username: 'admin',
+        role: 'admin'
+      });
+      adminCookie = `ayush_auth_token=${session.token}`;
+    }
+
     server = http.createServer(app);
     await new Promise((resolve) => {
       server.listen(0, '127.0.0.1', () => {
@@ -82,12 +94,12 @@ describe('Network & CORS Validation: Cellular (ccmni), Hotspot (ap0), LAN & IPv6
     ];
 
     for (const ep of endpoints) {
-      const res = await fetch(`${baseUrl}${ep}`, {
-        headers: {
-          'Origin': ccmniOrigin,
-          'Connection': 'close'
-        }
-      });
+      const headers = {
+        'Origin': ccmniOrigin,
+        'Connection': 'close'
+      };
+      if (adminCookie) headers['Cookie'] = adminCookie;
+      const res = await fetch(`${baseUrl}${ep}`, { headers });
       assert.equal(res.status, 200, `Endpoint ${ep} should return 200 for ccmni origin`);
       assert.equal(res.headers.get('access-control-allow-origin'), ccmniOrigin);
       assert.equal(res.headers.get('access-control-allow-credentials'), 'true');
