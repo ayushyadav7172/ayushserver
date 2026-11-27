@@ -5302,6 +5302,239 @@ app.post('/api/cleanup/retention', requireAdminAccess(), (req, res) => {
   }
 });
 
+// ==================== SYSTEM & TOOLS MANAGEMENT API ====================
+function getToolVersion(binName, versionArg = '-version', regex = /version\s+([^\s,]+)/i) {
+  try {
+    const { execSync } = require('child_process');
+    const out = execSync(`${binName} ${versionArg}`, {
+      encoding: 'utf8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const firstLine = out.split('\n')[0].trim();
+    const match = firstLine.match(regex);
+    return {
+      installed: true,
+      version: match ? match[1] : firstLine,
+      details: firstLine
+    };
+  } catch (err) {
+    return {
+      installed: false,
+      version: null,
+      error: err.message
+    };
+  }
+}
+
+async function getSystemToolsInfoAsync() {
+  const { execSync } = require('child_process');
+  const ffmpegInfo = getToolVersion('ffmpeg', '-version', /ffmpeg version\s+([^\s]+)/i);
+  const ffprobeInfo = getToolVersion('ffprobe', '-version', /ffprobe version\s+([^\s]+)/i);
+  const qpdfInfo = getToolVersion('qpdf', '--version', /qpdf version\s+([^\s]+)/i);
+  const gsInfo = getToolVersion('gs', '--version', /^([0-9.]+)/i);
+
+  let gitBranch = 'unknown';
+  let gitCommit = 'unknown';
+  try {
+    gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    gitCommit = execSync('git rev-parse --short HEAD', { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) {}
+
+  // Check /sdcard access
+  let sdcardStatus = { accessible: false, writable: false, path: '/sdcard' };
+  try {
+    if (fs.existsSync('/sdcard')) {
+      sdcardStatus.accessible = true;
+      try {
+        const testFile = path.join('/sdcard', `.ayush_test_${Date.now()}`);
+        fs.writeFileSync(testFile, 'test');
+        fs.unlinkSync(testFile);
+        sdcardStatus.writable = true;
+      } catch (_) {
+        sdcardStatus.writable = false;
+      }
+    }
+  } catch (_) {}
+
+  const isTermux = Boolean(process.env.TERMUX_VERSION || fs.existsSync('/data/data/com.termux'));
+
+  return {
+    success: true,
+    tools: {
+      ffmpeg: ffmpegInfo,
+      ffprobe: ffprobeInfo,
+      qpdf: qpdfInfo,
+      ghostscript: gsInfo
+    },
+    system: {
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      uptimeSeconds: Math.floor(process.uptime()),
+      memory: {
+        rssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+        heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        totalMemMb: Math.round(os.totalmem() / 1024 / 1024),
+        freeMemMb: Math.round(os.freemem() / 1024 / 1024)
+      },
+      isTermux,
+      canUpdateToolsViaPkg: isTermux && fs.existsSync('/data/data/com.termux/files/usr/bin/pkg')
+    },
+    app: {
+      name: 'ayushserver',
+      version: '1.0.0',
+      gitBranch,
+      gitCommit
+    },
+    storage: sdcardStatus
+  };
+}
+
+async function checkSystemUpdatesAsync() {
+  const https = require('https');
+  const info = await getSystemToolsInfoAsync();
+  let latestAppRelease = null;
+  let updateAvailable = false;
+
+  try {
+    latestAppRelease = await new Promise((resolve) => {
+      const req = https.get('https://api.github.com/repos/ayushyadav7172/ayushserver/releases/latest', {
+        headers: { 'User-Agent': 'AyushServer-Studio' },
+        timeout: 5000
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            try { resolve(JSON.parse(data)); } catch (_) { resolve(null); }
+          } else {
+            resolve(null);
+          }
+        });
+      });
+      req.on('error', () => resolve(null));
+      req.on('timeout', () => { req.destroy(); resolve(null); });
+    });
+  } catch (_) {}
+
+  if (latestAppRelease && latestAppRelease.tag_name) {
+    const remoteVer = latestAppRelease.tag_name.replace(/^v/i, '');
+    const localVer = info.app.version;
+    if (remoteVer !== localVer) {
+      updateAvailable = true;
+    }
+  }
+
+  return {
+    success: true,
+    currentAppVersion: info.app.version,
+    latestAppRelease: latestAppRelease ? {
+      tag: latestAppRelease.tag_name,
+      name: latestAppRelease.name,
+      publishedAt: latestAppRelease.published_at,
+      apkUrl: latestAppRelease.assets?.find(a => a.name.endsWith('.apk'))?.browser_download_url || null,
+      notes: latestAppRelease.body || ''
+    } : null,
+    updateAvailable,
+    tools: info.tools,
+    canUpdateTools: info.system.canUpdateToolsViaPkg
+  };
+}
+
+async function runToolsUpdateAsync(target = 'ffmpeg') {
+  const { spawn } = require('child_process');
+  const isTermux = Boolean(process.env.TERMUX_VERSION || fs.existsSync('/data/data/com.termux'));
+
+  return new Promise((resolve) => {
+    let cmd = '';
+    let args = [];
+
+    if (target === 'ffmpeg') {
+      if (isTermux && fs.existsSync('/data/data/com.termux/files/usr/bin/pkg')) {
+        cmd = 'pkg';
+        args = ['install', '-y', 'ffmpeg'];
+      } else {
+        return resolve({
+          success: false,
+          error: 'Automatic package installation is supported in Termux or Debian/Ubuntu environments with pkg or apt.'
+        });
+      }
+    } else if (target === 'app') {
+      cmd = 'git';
+      args = ['pull', '--ff-only'];
+    } else if (target === 'all') {
+      cmd = isTermux ? 'pkg' : 'git';
+      args = isTermux ? ['upgrade', '-y', 'ffmpeg'] : ['pull'];
+    } else {
+      return resolve({ success: false, error: `Invalid update target "${target}". Expected "ffmpeg", "app", or "all".` });
+    }
+
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+
+    const timeout = setTimeout(() => {
+      try { child.kill('SIGTERM'); } catch (_) {}
+      resolve({
+        success: false,
+        error: 'Update command timed out after 120 seconds.',
+        output: stdout + '\n' + stderr
+      });
+    }, 120000);
+
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      resolve({
+        success: code === 0,
+        exitCode: code,
+        output: (stdout + (stderr ? '\n[stderr]\n' + stderr : '')).trim(),
+        message: code === 0 ? `Successfully updated ${target}.` : `Update process exited with code ${code}.`
+      });
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      resolve({
+        success: false,
+        error: err.message,
+        output: stdout + '\n' + stderr
+      });
+    });
+  });
+}
+
+app.get('/api/system/tools-info', async (req, res) => {
+  try {
+    const info = await getSystemToolsInfoAsync();
+    res.json(info);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/system/check-updates', requireAdminAccess(), async (req, res) => {
+  try {
+    const updateStatus = await checkSystemUpdatesAsync();
+    res.json(updateStatus);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/system/update-tools', requireAdminAccess({ blockPublicTunnelWithoutToken: true }), async (req, res) => {
+  try {
+    const target = req.body?.target || 'ffmpeg';
+    const result = await runToolsUpdateAsync(target);
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   if (err.code === 'ENOSPC' || (err.message && err.message.includes('ENOSPC'))) {

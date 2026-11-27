@@ -428,8 +428,128 @@
     }
   }
 
+  // ==================== SYSTEM & TOOLS CENTER ====================
+  const btnCheckToolsUpdate = document.getElementById('btnCheckToolsUpdate');
+  const btnCheckToolsText = document.getElementById('btnCheckToolsText');
+  const btnTriggerToolsUpdate = document.getElementById('btnTriggerToolsUpdate');
+  const btnUpdateToolsText = document.getElementById('btnUpdateToolsText');
+  const toolsStatusBadge = document.getElementById('toolsStatusBadge');
+  const toolsUpdateDrawer = document.getElementById('toolsUpdateDrawer');
+  const toolsUpdateLog = document.getElementById('toolsUpdateLog');
+  const btnCloseUpdateDrawer = document.getElementById('btnCloseUpdateDrawer');
+
+  async function loadToolsInfo() {
+    try {
+      const res = await fetch('/api/system/tools-info');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.success) return;
+
+      const fVerEl = document.getElementById('toolFfmpegVersion');
+      const fMetaEl = document.getElementById('toolFfmpegMeta');
+      if (fVerEl) fVerEl.textContent = data.tools?.ffmpeg?.version ? `v${data.tools.ffmpeg.version}` : 'Not Detected';
+      if (fMetaEl) fMetaEl.textContent = `${data.system?.platform || 'linux'} (${data.system?.arch || 'arm64'})`;
+
+      const pVerEl = document.getElementById('toolFfprobeVersion');
+      const pMetaEl = document.getElementById('toolFfprobeMeta');
+      if (pVerEl) pVerEl.textContent = data.tools?.ffprobe?.version ? `v${data.tools.ffprobe.version}` : 'Not Detected';
+      if (pMetaEl) pMetaEl.textContent = 'Analyzer Ready';
+
+      const aVerEl = document.getElementById('toolAppVersion');
+      const aMetaEl = document.getElementById('toolAppMeta');
+      if (aVerEl) aVerEl.textContent = `v${data.app?.version || '1.0.0'}`;
+      if (aMetaEl) aMetaEl.textContent = `Branch: ${data.app?.gitBranch || 'main'} (${data.app?.gitCommit || 'latest'})`;
+
+      const sStatEl = document.getElementById('toolStorageStatus');
+      const sMetaEl = document.getElementById('toolStorageMeta');
+      if (sStatEl) {
+        if (data.storage?.accessible) {
+          sStatEl.textContent = data.storage.writable ? 'Full Access ✔' : 'Read Only ⚠';
+          sStatEl.style.color = data.storage.writable ? 'var(--dash-success)' : 'var(--dash-warning)';
+        } else {
+          sStatEl.textContent = 'Locked 🔒';
+          sStatEl.style.color = 'var(--dash-danger)';
+        }
+      }
+      if (sMetaEl) sMetaEl.textContent = data.storage?.path ? `${data.storage.path} available` : 'Internal storage';
+    } catch (_) {}
+  }
+
+  if (btnCloseUpdateDrawer) {
+    btnCloseUpdateDrawer.addEventListener('click', () => {
+      if (toolsUpdateDrawer) toolsUpdateDrawer.style.display = 'none';
+    });
+  }
+
+  if (btnCheckToolsUpdate) {
+    btnCheckToolsUpdate.addEventListener('click', async () => {
+      try {
+        if (btnCheckToolsText) btnCheckToolsText.textContent = 'Checking...';
+        btnCheckToolsUpdate.disabled = true;
+
+        const res = await fetch('/api/system/check-updates', { method: 'POST' });
+        const data = await res.json();
+
+        if (toolsUpdateDrawer) toolsUpdateDrawer.style.display = 'block';
+        if (toolsUpdateLog) {
+          if (data.updateAvailable) {
+            toolsUpdateLog.textContent = `[UPDATE AVAILABLE]\nLatest version: ${data.latestAppRelease?.tag || 'Newer'}\nPublished: ${data.latestAppRelease?.publishedAt || 'Recently'}\n\nNotes:\n${data.latestAppRelease?.notes || 'Bug fixes and performance improvements.'}`;
+            if (toolsStatusBadge) {
+              toolsStatusBadge.textContent = 'Update Available 🚀';
+              toolsStatusBadge.className = 'status-badge status-warning';
+            }
+          } else {
+            toolsUpdateLog.textContent = `[STATUS]\nAll tools and app engine are up to date!\nCurrent Version: v${data.currentAppVersion}\nFFmpeg: v${data.tools?.ffmpeg?.version || 'Installed'}\nCan Update via Package Manager: ${data.canUpdateTools ? 'Yes' : 'Manual'}`;
+            if (toolsStatusBadge) {
+              toolsStatusBadge.textContent = 'Up to Date ✔';
+              toolsStatusBadge.className = 'status-badge status-healthy';
+            }
+          }
+        }
+      } catch (err) {
+        if (toolsUpdateDrawer) toolsUpdateDrawer.style.display = 'block';
+        if (toolsUpdateLog) toolsUpdateLog.textContent = `[Error checking updates]: ${err.message}`;
+      } finally {
+        if (btnCheckToolsText) btnCheckToolsText.textContent = 'Check for Updates';
+        btnCheckToolsUpdate.disabled = false;
+      }
+    });
+  }
+
+  if (btnTriggerToolsUpdate) {
+    btnTriggerToolsUpdate.addEventListener('click', async () => {
+      const confirmRun = confirm('Do you want to update FFmpeg and native media tools now?');
+      if (!confirmRun) return;
+
+      try {
+        if (btnUpdateToolsText) btnUpdateToolsText.textContent = 'Updating...';
+        btnTriggerToolsUpdate.disabled = true;
+        if (toolsUpdateDrawer) toolsUpdateDrawer.style.display = 'block';
+        if (toolsUpdateLog) toolsUpdateLog.textContent = '[Executing Tools Update Command...]\nPlease wait, this may take a moment...';
+
+        const res = await fetch('/api/system/update-tools', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target: 'ffmpeg' })
+        });
+        const result = await res.json();
+
+        if (toolsUpdateLog) {
+          toolsUpdateLog.textContent = `[Update ${result.success ? 'COMPLETED' : 'RESULT'}]\n${result.message || ''}\n\n${result.output || result.error || ''}`;
+        }
+        await loadToolsInfo();
+      } catch (err) {
+        if (toolsUpdateLog) toolsUpdateLog.textContent = `[Update Failed]: ${err.message}`;
+      } finally {
+        if (btnUpdateToolsText) btnUpdateToolsText.textContent = '⬇ Update Tools';
+        btnTriggerToolsUpdate.disabled = false;
+      }
+    });
+  }
+
   // Initial load and start timer
   const initialMs = refreshIntervalSelect ? parseInt(refreshIntervalSelect.value, 10) : 10000;
   triggerRefresh(false);
+  loadToolsInfo();
   setupAutoRefresh(initialMs);
 })();

@@ -1,0 +1,18 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="50%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="110" fill="#0f1115"/>
+  <rect x="36" y="36" width="440" height="440" rx="90" fill="url(#grad)" opacity="0.15"/>
+  <!-- Inner symbol -->
+  <path d="M140 160 L372 160 C385 160 395 170 395 183 L395 329 C395 342 385 352 372 352 L140 352 C127 352 117 342 117 329 L117 183 C117 170 127 160 140 160 Z" fill="none" stroke="url(#grad)" stroke-width="24" stroke-linejoin="round"/>
+  <!-- Play triangle / media symbol -->
+  <polygon points="220,210 320,256 220,302" fill="url(#grad)"/>
+  <!-- Status dot -->
+  <circle cx="360" cy="195" r="16" fill="#22c55e"/>
+</svg>
