@@ -1686,8 +1686,7 @@
         return;
       }
       if (mode === 'local' && window.currentUser && window.currentUser.role === 'guest') {
-        showToast('Local phone storage is locked in Guest mode. Please sign in as Admin.', 'warning');
-        return;
+        mode = 'remote';
       }
       if (mode === 'remote') {
         $('btnImageModeLocal')?.classList.remove('active');
@@ -1856,6 +1855,12 @@
         const dt = e.dataTransfer;
         if (dt && dt.files && dt.files.length > 0) {
           uploadImages(dt.files);
+        }
+      });
+      dropzone.addEventListener('click', (e) => {
+        const input = $('imageFileInput');
+        if (e.target !== input && input) {
+          input.click();
         }
       });
     }
