@@ -133,6 +133,7 @@ class MainActivity : AppCompatActivity() {
                 if (request?.isForMainFrame == true) {
                     swipeRefreshLayout.isRefreshing = false
                     progressBar.visibility = View.GONE
+                    showOfflinePage()
                 }
             }
         }
@@ -186,6 +187,55 @@ class MainActivity : AppCompatActivity() {
     private fun loadServer() {
         swipeRefreshLayout.isRefreshing = true
         webView.loadUrl(serverUrl)
+    }
+
+    private fun showOfflinePage() {
+        val html = """
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Server Offline</title>
+              <style>
+                * { box-sizing: border-box; }
+                body { background: #0f1115; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 24px; text-align: center; }
+                .card { background: #181a20; border: 1px solid #2d3139; border-radius: 20px; padding: 32px 24px; max-width: 380px; width: 100%; box-shadow: 0 12px 30px rgba(0,0,0,0.6); }
+                .icon { font-size: 52px; margin-bottom: 16px; }
+                h2 { margin: 0 0 10px; font-size: 22px; color: #38bdf8; font-weight: 700; }
+                p { color: #94a3b8; font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
+                .code-box { background: #090a0d; color: #22c55e; padding: 12px 16px; border-radius: 10px; font-family: monospace; font-size: 14px; font-weight: 600; margin-bottom: 24px; border: 1px solid rgba(34,197,94,0.25); word-break: break-all; }
+                .btn { background: #38bdf8; color: #000; font-weight: 700; border: none; padding: 14px 20px; border-radius: 10px; font-size: 15px; cursor: pointer; width: 100%; transition: opacity 0.2s; }
+                .btn:active { opacity: 0.8; }
+                .status { font-size: 12px; color: #64748b; margin-top: 16px; display: flex; align-items: center; justify-content: center; }
+                .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #eab308; margin-right: 6px; animation: pulse 1.5s infinite; }
+                @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <div class="icon">⚡</div>
+                <h2>Server is Offline</h2>
+                <p>AyushServer is not running in Termux yet.<br>Please open <b>Termux</b> and start the server:</p>
+                <div class="code-box">npm start</div>
+                <button class="btn" onclick="retry()">🔄 Connect to Server</button>
+                <div class="status"><span class="dot"></span><span id="st">Waiting for Termux server (auto-detecting)...</span></div>
+              </div>
+              <script>
+                function retry() {
+                  document.getElementById('st').textContent = 'Connecting...';
+                  window.location.href = '$serverUrl';
+                }
+                setInterval(() => {
+                  fetch('$serverUrl/api/health/live')
+                    .then(res => { if (res.ok) window.location.href = '$serverUrl'; })
+                    .catch(() => {});
+                }, 2500);
+              </script>
+            </body>
+            </html>
+        """.trimIndent()
+        webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
     }
 
     private fun requestAppPermissions() {
