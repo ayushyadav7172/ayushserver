@@ -49,33 +49,33 @@ jobs:
       - name: Prepare APK Package
         run: |
           mkdir -p release-apk
-          cp android/app/build/outputs/apk/release/*.apk release-apk/AyushServer-v1.0.05.apk
+          cp android/app/build/outputs/apk/release/*.apk release-apk/AyushServer-v1.0.06.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: AyushServer-Standalone-APK
-          path: release-apk/AyushServer-v1.0.05.apk
+          path: release-apk/AyushServer-v1.0.06.apk
           retention-days: 30
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.05-app
-          name: "AyushServer Standalone App v1.0.05"
+          tag_name: v1.0.06-app
+          name: "AyushServer Standalone App v1.0.06"
           body: |
-            ### 📱 AyushServer Standalone Android APK v1.0.05
+            ### 📱 AyushServer Standalone Android APK v1.0.06
 
-            **Universal Multi-Server Support & Cleartext Fixes:**
-            * 🌐 **Universal Network & Multi-Project Support:** Complete cleartext HTTP traffic unlocked (`usesCleartextTraffic="true"`) for all local IPs (`192.168.*`, `10.*`, `172.*`, localhost) and custom domains.
-            * 🔓 **No Proprietary Route Lock:** Removed `/api/health/live` blocking probe. Any project running on any IP and port (Flask, Vite, React, PHP, Node.js, etc.) now loads directly without being falsely flagged offline.
-            * ✍️ **High-Contrast Custom URL Inputs:** Fixed invisible text typing in custom URL and download folder dialogs with a high-contrast dark box, cyan border, and crisp white font.
+            **In-App Experience & True Browser Reload:**
+            * 🔄 **Chrome-Style Pull-Down Refresh:** Pulling down to refresh now reloads the active webpage instead of bouncing back to the root homepage.
+            * 🌐 **Universal Multi-Project & Any IP Support:** Cleartext HTTP traffic unlocked (`usesCleartextTraffic="true"`) for all local IPs (`192.168.*`, `10.*`, `172.*`, localhost, any port).
+            * 🔓 **No Proprietary Route Lock:** Loads any web server/framework (Flask, Vite, React, PHP, Node.js) directly without false offline blocks.
+            * ✍️ **High-Contrast Custom URL Inputs:** Sharp white text on dark background with cyan border for custom IP and download folder dialogs.
             * 🔒 **Dev SSL Support & Mixed Content:** Enabled self-signed certificate handling and mixed content for development environments.
-            * ⚡ **Universal Auto-Reconnect:** Offline recovery now pings the target host universally, automatically reconnecting as soon as the target server is started.
             * 🖥️ **Desktop Site View & Real-Time Zoom:** Native 1200px desktop mode and page scaling presets.
 
-            **Download:** Download `AyushServer-v1.0.05.apk` below.
-          files: release-apk/AyushServer-v1.0.05.apk
+            **Download:** Download `AyushServer-v1.0.06.apk` below.
+          files: release-apk/AyushServer-v1.0.06.apk
           draft: false
           prerelease: false
         env:

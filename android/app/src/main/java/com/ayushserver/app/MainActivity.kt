@@ -143,7 +143,12 @@ class MainActivity : AppCompatActivity() {
             )
             setColorSchemeColors(ContextCompat.getColor(context, android.R.color.holo_blue_bright))
             setOnRefreshListener {
-                loadServer()
+                val currentUrl = webView.url
+                if (!currentUrl.isNullOrBlank() && !currentUrl.startsWith("data:")) {
+                    webView.reload()
+                } else {
+                    loadServer()
+                }
             }
         }
 
@@ -704,7 +709,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, (14 * density).toInt(), 0, (14 * density).toInt())
         }
         val updateTitle = TextView(this).apply {
-            val appVer = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.05" } catch (e: Exception) { "1.0.05" }
+            val appVer = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.06" } catch (e: Exception) { "1.0.06" }
             text = "🔄  App & Tools Update (v$appVer)"
             textSize = 14f
             setTextColor(Color.parseColor("#E2E8F0"))
