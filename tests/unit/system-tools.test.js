@@ -23,7 +23,13 @@ describe('System Tools & In-App Update API', () => {
     // Create admin session for test if admin exists
     try {
       if (databaseManager.hasAnyAdmin()) {
-        const session = databaseManager.createAuthSession(1, 'admin', 'admin', 3600);
+        const admin = databaseManager.getAllAdmins()[0];
+        const session = databaseManager.createAuthSession({
+          userId: admin ? admin.id : null,
+          username: admin ? admin.username : 'admin',
+          role: 'admin',
+          maxAgeMs: 3600000
+        });
         adminCookie = `ayush_auth_token=${session.token}`;
       }
     } catch (_) {}
