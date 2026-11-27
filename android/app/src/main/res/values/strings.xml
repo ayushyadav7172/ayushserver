@@ -1,7 +1,0 @@
-<resources>
-    <string name="app_name">AyushServer Studio</string>
-    <string name="notification_channel_name">AyushServer Background Service</string>
-    <string name="notification_channel_desc">Keeps media processing and background tasks running</string>
-    <string name="notification_title">AyushServer Media Engine Active</string>
-    <string name="notification_text">Native processing engine is running in the background.</string>
-</resources>

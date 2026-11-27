@@ -157,27 +157,15 @@ Enter choice (1-4):
 
 ---
 
-## 📱 Standalone Android App & In-App Tools Updates
+## 📱 Mobile Web & Terminal Experience
 
-AyushServer supports running both as an offline web service and as a **Standalone Android App** with in-app native tool update capabilities:
+AyushServer runs as an offline-first, high-performance web service with full mobile browser support:
 
-### 1. In-App Tools & System Center (`/dashboard`)
-* **Real-Time Tool Detection:** Shows installed versions of `FFmpeg 9.x`, `ffprobe`, `Node.js`, and Android storage permissions directly from the Dashboard.
-* **One-Click Tool Updates:** Admins can check for newer FFmpeg/tool versions and update them directly from the web interface without opening the command line (`POST /api/system/update-tools`).
-* **In-App APK Updates:** Checks GitHub releases for newer APK builds and triggers seamless in-app downloads via Android's `DownloadManager` and `FileProvider`.
-
-### 2. Standalone Android Project (`android/`)
-* **Architecture:** Native Android application in Kotlin with full hardware-accelerated WebView.
-* **Multi-Device & Custom Server IP Switcher:** Floating `🌐` connection button and embedded offline switcher allow connecting to any device on the Wi-Fi network (e.g. `192.168.1.15:3000`) or resetting to Localhost with persistent storage.
-* **Persistent Background Processing:** Built-in `ServerForegroundService` holds a partial CPU wake-lock so video encoding and PDF rendering never sleep when the phone screen is locked.
-* **Full Storage Access:** Configured with `MANAGE_EXTERNAL_STORAGE` (`All Files Access`) for browsing and processing `/sdcard` internal storage in Direct Mode.
-* **Cloud Build via GitHub Actions:** Automatic CI/CD workflow (`.github/workflows/android-build.yml`) builds the APK in GitHub cloud and provides a direct `.apk` download link without burdening phone CPU/RAM.
-
-### 3. Progressive Web App (PWA / WebAPK)
+### 1. Progressive Web App (PWA)
 * Includes `manifest.json` and `sw.js` (Service Worker).
-* Can be installed directly from Chrome / Firefox ("Install App" / "Add to Home screen") to run as a full-screen, frameless native mobile app on any Android device.
+* Can be installed directly from Chrome / Firefox ("Install App" / "Add to Home screen") to run as a full-screen, frameless native web application on any smartphone, tablet, or PC.
 
-### 4. 🚀 1-Click Terminal Project Updater (`update ayushserver`)
+### 2. 🚀 1-Click Terminal Project Updater (`update ayushserver`)
 Any user or friend running an older version can update to the latest code, dependencies, and database migrations with a single shortcut command from anywhere in Termux:
 ```bash
 update ayushserver

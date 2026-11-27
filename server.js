@@ -5433,7 +5433,6 @@ async function checkSystemUpdatesAsync() {
       tag: latestAppRelease.tag_name,
       name: latestAppRelease.name,
       publishedAt: latestAppRelease.published_at,
-      apkUrl: latestAppRelease.assets?.find(a => a.name.endsWith('.apk'))?.browser_download_url || null,
       notes: latestAppRelease.body || ''
     } : null,
     updateAvailable,
