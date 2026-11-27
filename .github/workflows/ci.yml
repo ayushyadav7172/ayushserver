@@ -48,7 +48,7 @@ jobs:
           "
 
       - name: Run unit tests
-        run: node --test tests/unit/*.test.js
+        run: node --test --test-concurrency=1 tests/unit/*.test.js
 
       - name: Run API integration tests
-        run: node --test tests/integration/server-api.test.js tests/integration/job-lifecycle.test.js
+        run: node --test --test-concurrency=1 tests/integration/server-api.test.js tests/integration/job-lifecycle.test.js
