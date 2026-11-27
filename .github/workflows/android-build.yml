@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - feature/app-support
     paths:
       - 'android/**'
       - '.github/workflows/android-build.yml'
