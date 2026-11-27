@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -206,6 +207,7 @@ class MainActivity : AppCompatActivity() {
         settings.allowContentAccess = true
         settings.mediaPlaybackRequiresUserGesture = false
         settings.cacheMode = WebSettings.LOAD_NO_CACHE
+        settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 
         webView.setBackgroundColor(Color.parseColor("#0F1115"))
 
@@ -253,6 +255,33 @@ class MainActivity : AppCompatActivity() {
                     injectViewportMode(true)
                 }
                 applyZoom(pageZoom)
+            }
+
+            override fun onReceivedSslError(
+                view: WebView?,
+                handler: SslErrorHandler?,
+                error: SslError?
+            ) {
+                // Allow dev servers, LAN IPs, and self-signed certificates
+                handler?.proceed()
+            }
+
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): Boolean {
+                val url = request?.url?.toString() ?: return false
+                return if (url.startsWith("http://") || url.startsWith("https://")) {
+                    false // Keep web browsing inside WebView
+                } else {
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        startActivity(intent)
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
             }
 
             override fun onReceivedError(
@@ -675,7 +704,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, (14 * density).toInt(), 0, (14 * density).toInt())
         }
         val updateTitle = TextView(this).apply {
-            val appVer = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.04" } catch (e: Exception) { "1.0.04" }
+            val appVer = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.05" } catch (e: Exception) { "1.0.05" }
             text = "🔄  App & Tools Update (v$appVer)"
             textSize = 14f
             setTextColor(Color.parseColor("#E2E8F0"))
@@ -842,18 +871,35 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showChangeLocationDialog() {
+        val density = resources.displayMetrics.density
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (20 * density).toInt()
+            setPadding(pad, (10 * density).toInt(), pad, (10 * density).toInt())
+        }
+
+        val inputBg = GradientDrawable().apply {
+            setColor(Color.parseColor("#181A20"))
+            setStroke((1.5f * density).toInt(), Color.parseColor("#38BDF8"))
+            cornerRadius = 8 * density
+        }
+
         val editText = EditText(this).apply {
             setText(downloadFolder)
             hint = "Folder name inside Downloads"
-            setPadding(32, 24, 32, 24)
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
+            val p = (12 * density).toInt()
+            setPadding(p, p, p, p)
+            background = inputBg
+            setTextColor(Color.parseColor("#F8FAFC"))
+            setHintTextColor(Color.parseColor("#64748B"))
+            textSize = 14f
         }
+        container.addView(editText)
 
         AlertDialog.Builder(this)
             .setTitle("📁 Download Folder Location")
             .setMessage("All files downloaded from AyushServer will be saved inside your phone's Downloads directory:\n\n/sdcard/Download/[Folder Name]")
-            .setView(editText)
+            .setView(container)
             .setPositiveButton("Save") { _, _ ->
                 val newFolder = editText.text.toString().trim()
                 if (newFolder.isNotEmpty()) {
@@ -870,19 +916,36 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun showServerUrlDialog() {
+        val density = resources.displayMetrics.density
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (20 * density).toInt()
+            setPadding(pad, (10 * density).toInt(), pad, (10 * density).toInt())
+        }
+
+        val inputBg = GradientDrawable().apply {
+            setColor(Color.parseColor("#181A20"))
+            setStroke((1.5f * density).toInt(), Color.parseColor("#38BDF8"))
+            cornerRadius = 8 * density
+        }
+
         val editText = EditText(this).apply {
             setText(serverUrl)
             hint = "http://192.168.1.15:3000"
             setSelection(text.length)
-            setPadding(32, 24, 32, 24)
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
+            val p = (12 * density).toInt()
+            setPadding(p, p, p, p)
+            background = inputBg
+            setTextColor(Color.parseColor("#F8FAFC"))
+            setHintTextColor(Color.parseColor("#64748B"))
+            textSize = 14f
         }
+        container.addView(editText)
 
         AlertDialog.Builder(this)
-            .setTitle("AyushServer Connection")
-            .setMessage("Enter the IP and port of the device running AyushServer:\n(e.g., 192.168.1.15:3000 or 127.0.0.1:3000)")
-            .setView(editText)
+            .setTitle("🌐 Server Connection")
+            .setMessage("Enter the URL/IP of any server or project to open:\n(e.g., 192.168.1.15:3000, 127.0.0.1:5000, or any website)")
+            .setView(container)
             .setPositiveButton("Connect") { _, _ ->
                 val newUrl = editText.text.toString().trim()
                 if (newUrl.isNotEmpty()) {
@@ -978,48 +1041,7 @@ class MainActivity : AppCompatActivity() {
     private fun loadServer() {
         swipeRefreshLayout.isRefreshing = true
         val target = serverUrl
-        CoroutineScope(Dispatchers.IO).launch {
-            val isLive = isServerAlive(target)
-            withContext(Dispatchers.Main) {
-                if (isLive) {
-                    webView.loadUrl(target)
-                } else {
-                    swipeRefreshLayout.isRefreshing = false
-                    progressBar.visibility = View.GONE
-                    showOfflinePage()
-                }
-            }
-        }
-    }
-
-    private fun isServerAlive(rawUrl: String): Boolean {
-        return try {
-            val clean = sanitizeUrl(rawUrl).trimEnd('/')
-            val probeUrl = "$clean/api/health/live"
-            val conn = (URL(probeUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 1500
-                readTimeout = 1500
-                instanceFollowRedirects = false
-            }
-            val code = conn.responseCode
-            conn.disconnect()
-            code in 200..399
-        } catch (_: Exception) {
-            try {
-                val conn = (URL(sanitizeUrl(rawUrl)).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "HEAD"
-                    connectTimeout = 1200
-                    readTimeout = 1200
-                    instanceFollowRedirects = false
-                }
-                val code = conn.responseCode
-                conn.disconnect()
-                code in 200..399
-            } catch (_: Exception) {
-                false
-            }
-        }
+        webView.loadUrl(target)
     }
 
     private fun showOfflinePage() {
@@ -1044,8 +1066,9 @@ class MainActivity : AppCompatActivity() {
                 .ip-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2d3139; text-align: left; }
                 .ip-label { font-size: 12px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px; }
                 .input-row { display: flex; gap: 8px; margin-bottom: 8px; }
-                input[type=text] { flex: 1; background: #090a0d; border: 1px solid #38bdf866; color: #fff; padding: 10px 12px; border-radius: 8px; font-size: 13px; font-family: monospace; }
+                input[type=text] { flex: 1; background: #090a0d !important; border: 1.5px solid #38bdf8 !important; color: #f8fafc !important; -webkit-text-fill-color: #f8fafc !important; caret-color: #38bdf8 !important; padding: 10px 12px; border-radius: 8px; font-size: 13px; font-family: monospace; }
                 input[type=text]:focus { outline: none; border-color: #38bdf8; }
+                input[type=text]::placeholder { color: #64748b !important; -webkit-text-fill-color: #64748b !important; }
                 .btn-save { background: #22c55e; color: #000; font-weight: 700; border: none; padding: 10px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; }
                 .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #2d3139; padding: 8px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; width: 100%; margin-top: 6px; }
                 .status { font-size: 11px; color: #64748b; margin-top: 14px; display: flex; align-items: center; justify-content: center; }
@@ -1057,12 +1080,12 @@ class MainActivity : AppCompatActivity() {
               <div class="card">
                 <div class="icon">⚡</div>
                 <h2>Server Not Responding</h2>
-                <p>Cannot reach AyushServer at:</p>
+                <p>Cannot reach server at:</p>
                 <div class="target-box" id="currentTarget">$current</div>
                 <button class="btn" onclick="retry()">🔄 Retry Connection</button>
 
                 <div class="ip-section">
-                  <div class="ip-label">🌐 Connect to Another Device / Custom IP:</div>
+                  <div class="ip-label">🌐 Connect to Any Device / Custom IP:</div>
                   <div class="input-row">
                     <input type="text" id="customInput" placeholder="192.168.1.15:3000" value="$current" />
                     <button class="btn-save" onclick="applyIp()">Connect</button>
@@ -1097,15 +1120,18 @@ class MainActivity : AppCompatActivity() {
                     window.location.href = 'http://127.0.0.1:3000';
                   }
                 }
+                let checking = false;
                 setInterval(() => {
-                  fetch('$current'.replace(/\/+$/, '') + '/api/health/live', { method: 'GET', cache: 'no-store' })
-                    .then(res => {
-                      if (res.ok) {
-                        document.getElementById('st').textContent = 'Server detected online! Loading...';
-                        setTimeout(() => retry(), 400);
-                      }
+                  if (checking) return;
+                  checking = true;
+                  fetch('$current', { method: 'GET', mode: 'no-cors', cache: 'no-store' })
+                    .then(() => {
+                      document.getElementById('st').textContent = 'Server detected online! Loading...';
+                      setTimeout(() => retry(), 300);
                     })
-                    .catch(() => {});
+                    .catch(() => {
+                      checking = false;
+                    });
                 }, 2000);
               </script>
             </body>
