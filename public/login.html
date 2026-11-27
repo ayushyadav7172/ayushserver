@@ -133,17 +133,30 @@
       width: 100%;
       padding: 10px 14px;
       border-radius: 8px;
-      background: var(--bg-input, rgba(255, 255, 255, 0.04));
-      border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
-      color: inherit;
+      background-color: #1e222b !important;
+      border: 1px solid #3b4252 !important;
+      color: #f8fafc !important;
+      -webkit-text-fill-color: #f8fafc !important;
+      caret-color: #60a5fa !important;
       font-size: 14px;
       box-sizing: border-box;
       outline: none;
       transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
     .form-control:focus {
-      border-color: #3b82f6;
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+      background-color: #262c38 !important;
+      border-color: #3b82f6 !important;
+      color: #ffffff !important;
+      -webkit-text-fill-color: #ffffff !important;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25) !important;
+    }
+    .form-control:-webkit-autofill,
+    .form-control:-webkit-autofill:hover,
+    .form-control:-webkit-autofill:focus {
+      -webkit-box-shadow: 0 0 0 1000px #1e222b inset !important;
+      -webkit-text-fill-color: #f8fafc !important;
+      caret-color: #60a5fa !important;
+      transition: background-color 5000s ease-in-out 0s;
     }
     .btn-block {
       width: 100%;

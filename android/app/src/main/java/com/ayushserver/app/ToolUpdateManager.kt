@@ -57,19 +57,19 @@ class ToolUpdateManager(private val context: Context) {
                 }
 
                 val currentVersion = try {
-                    context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.1"
+                    context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.2"
                 } catch (e: Exception) {
-                    "1.0.1"
+                    "1.0.2"
                 }
                 val cleanRemoteVer = tag.replace("^v", "").replace(Regex("[-_].*$"), "")
                 val isAvailable = cleanRemoteVer != currentVersion && apkUrl != null
 
                 UpdateInfo(isAvailable, tag, apkUrl, notes)
             } else {
-                UpdateInfo(false, "v1.0.1", null, "No newer release found")
+                UpdateInfo(false, "v1.0.2", null, "No newer release found")
             }
         } catch (e: Exception) {
-            UpdateInfo(false, "v1.0.1", null, "Check error: ${e.message}")
+            UpdateInfo(false, "v1.0.2", null, "Check error: ${e.message}")
         }
     }
 

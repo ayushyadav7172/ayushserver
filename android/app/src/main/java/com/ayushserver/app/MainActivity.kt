@@ -25,6 +25,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -203,6 +205,16 @@ class MainActivity : AppCompatActivity() {
         settings.mediaPlaybackRequiresUserGesture = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
 
+        webView.setBackgroundColor(Color.parseColor("#0F1115"))
+
+        // Disable automatic algorithmic darkening which corrupts input fields and colors
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+            WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, false)
+        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
+            WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
+        }
+
         // Zoom controls
         settings.setSupportZoom(true)
         settings.builtInZoomControls = true
@@ -224,10 +236,21 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                if (isDesktopMode) {
+                    injectViewportMode(true)
+                }
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 swipeRefreshLayout.isRefreshing = false
                 progressBar.visibility = View.GONE
+                if (isDesktopMode) {
+                    injectViewportMode(true)
+                }
+                applyZoom(pageZoom)
             }
 
             override fun onReceivedError(
@@ -316,10 +339,48 @@ class MainActivity : AppCompatActivity() {
             settings.useWideViewPort = false
             settings.loadWithOverviewMode = false
         }
+        settings.setSupportZoom(true)
+        settings.builtInZoomControls = true
+        settings.displayZoomControls = false
+        injectViewportMode(enabled)
+    }
+
+    private fun injectViewportMode(isDesktop: Boolean) {
+        val js = if (isDesktop) {
+            """
+            (function() {
+                var meta = document.querySelector('meta[name="viewport"]');
+                if (!meta) {
+                    meta = document.createElement('meta');
+                    meta.name = 'viewport';
+                    document.head.appendChild(meta);
+                }
+                meta.setAttribute('content', 'width=1200, initial-scale=' + (window.screen.width / 1200) + ', maximum-scale=3.0, user-scalable=yes');
+                document.documentElement.classList.add('desktop-site-enabled');
+            })();
+            """.trimIndent()
+        } else {
+            """
+            (function() {
+                var meta = document.querySelector('meta[name="viewport"]');
+                if (meta) {
+                    meta.setAttribute('content', 'width=device-width, initial-scale=1.0, viewport-fit=cover');
+                }
+                document.documentElement.classList.remove('desktop-site-enabled');
+            })();
+            """.trimIndent()
+        }
+        webView.evaluateJavascript(js, null)
     }
 
     private fun applyZoom(zoomPercent: Int) {
-        webView.settings.textZoom = zoomPercent
+        webView.settings.textZoom = 100
+        val js = """
+            (function() {
+                document.documentElement.style.zoom = '${zoomPercent}%';
+            })();
+        """.trimIndent()
+        webView.evaluateJavascript(js, null)
     }
 
     private fun handleDownload(
@@ -482,8 +543,31 @@ class MainActivity : AppCompatActivity() {
         zoomButtonsRow.addView(btnMinus)
         zoomButtonsRow.addView(btnResetZoom)
         zoomButtonsRow.addView(btnPlus)
+
+        val zoomPresetsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, (6 * density).toInt(), 0, 0)
+        }
+        val btn75 = createMenuButton("75%") {
+            pageZoom = 75
+            zoomHeader.text = "🔍  Page Scaling / Zoom (75%)"
+        }
+        val btn125 = createMenuButton("125%") {
+            pageZoom = 125
+            zoomHeader.text = "🔍  Page Scaling / Zoom (125%)"
+        }
+        val btn150 = createMenuButton("150%") {
+            pageZoom = 150
+            zoomHeader.text = "🔍  Page Scaling / Zoom (150%)"
+        }
+        zoomPresetsRow.addView(btn75)
+        zoomPresetsRow.addView(btn125)
+        zoomPresetsRow.addView(btn150)
+
         zoomSection.addView(zoomHeader)
         zoomSection.addView(zoomButtonsRow)
+        zoomSection.addView(zoomPresetsRow)
         container.addView(zoomSection)
 
         container.addView(createDivider())
@@ -589,7 +673,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, (14 * density).toInt(), 0, (14 * density).toInt())
         }
         val updateTitle = TextView(this).apply {
-            val appVer = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.1" } catch (e: Exception) { "1.0.1" }
+            val appVer = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.2" } catch (e: Exception) { "1.0.2" }
             text = "🔄  App & Tools Update (v$appVer)"
             textSize = 14f
             setTextColor(Color.parseColor("#E2E8F0"))

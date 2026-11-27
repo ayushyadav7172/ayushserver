@@ -395,21 +395,126 @@ code, pre, .mono { font-family: var(--mono); }
 .field-row { display: flex; gap: 10px; margin-top: 14px; }
 .field-row .input { flex: 1; }
 
-.input {
+/* Base & High Visibility Inputs for Desktop and Mobile/Android WebView */
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="search"],
+input[type="url"],
+input[type="email"],
+textarea,
+select,
+.input,
+.form-control,
+.search-bar input {
   width: 100%;
   padding: 9px 12px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-strong) !important;
   border-radius: var(--r-sm);
-  background: var(--surface);
-  color: var(--text);
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  -webkit-text-fill-color: var(--text) !important;
+  caret-color: var(--accent) !important;
   font-size: 0.88rem;
   transition: border-color 0.15s, box-shadow 0.15s;
+  box-sizing: border-box;
 }
-.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.input::placeholder { color: var(--text-dim); }
-.input:disabled { background: var(--surface-2); color: var(--text-dim); }
+
+[data-theme="dark"] input[type="text"],
+[data-theme="dark"] input[type="password"],
+[data-theme="dark"] input[type="number"],
+[data-theme="dark"] input[type="search"],
+[data-theme="dark"] input[type="url"],
+[data-theme="dark"] input[type="email"],
+[data-theme="dark"] textarea,
+[data-theme="dark"] select,
+[data-theme="dark"] .input,
+[data-theme="dark"] .form-control,
+[data-theme="dark"] .search-bar input {
+  background-color: #1e222b !important;
+  color: #f8fafc !important;
+  -webkit-text-fill-color: #f8fafc !important;
+  border-color: #3b4252 !important;
+  caret-color: #818cf8 !important;
+}
+
+[data-theme="dark"] input[type="text"]:focus,
+[data-theme="dark"] input[type="password"]:focus,
+[data-theme="dark"] input[type="number"]:focus,
+[data-theme="dark"] input[type="search"]:focus,
+[data-theme="dark"] input[type="url"]:focus,
+[data-theme="dark"] input[type="email"]:focus,
+[data-theme="dark"] textarea:focus,
+[data-theme="dark"] select:focus,
+[data-theme="dark"] .input:focus,
+[data-theme="dark"] .form-control:focus,
+[data-theme="dark"] .search-bar input:focus {
+  background-color: #262c38 !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  border-color: #6366f1 !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25) !important;
+  outline: none !important;
+}
+
+/* Autofill override for Chrome & Android WebView */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px #1e222b inset !important;
+  -webkit-text-fill-color: #f8fafc !important;
+  caret-color: #818cf8 !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+::placeholder {
+  color: var(--text-dim) !important;
+  -webkit-text-fill-color: var(--text-dim) !important;
+  opacity: 0.8;
+}
+
+.input:disabled { background: var(--surface-2) !important; color: var(--text-dim) !important; }
 textarea.input { resize: vertical; line-height: 1.5; }
 select.input { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%), linear-gradient(135deg, var(--text-dim) 50%, transparent 50%); background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; padding-right: 32px; }
+
+/* Forced Desktop Site Layout Rules */
+html.desktop-site-enabled,
+html.desktop-site-enabled body {
+  min-width: 1100px !important;
+  width: 100% !important;
+}
+html.desktop-site-enabled .topbar {
+  height: 60px !important;
+  padding: 0 24px !important;
+}
+html.desktop-site-enabled .nav-toggle {
+  display: none !important;
+}
+html.desktop-site-enabled .stepper {
+  position: static !important;
+  display: flex !important;
+  flex-direction: row !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+  border-bottom: none !important;
+}
+html.desktop-site-enabled .sys-status {
+  display: inline-flex !important;
+}
+html.desktop-site-enabled .brand-text small {
+  display: inline !important;
+}
+html.desktop-site-enabled .grid-2 {
+  grid-template-columns: 1fr 1fr !important;
+}
+html.desktop-site-enabled .image-workspace {
+  grid-template-columns: 340px 1fr !important;
+}
+html.desktop-site-enabled .image-top-link {
+  display: inline-flex !important;
+}
 
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 

@@ -48,8 +48,8 @@ jobs:
       - name: Prepare APK Package
         run: |
           mkdir -p release-apk
-          cp android/app/build/outputs/apk/release/*.apk release-apk/AyushServer-v1.0.1.apk
-          cp release-apk/AyushServer-v1.0.1.apk release-apk/AyushServer.apk
+          cp android/app/build/outputs/apk/release/*.apk release-apk/AyushServer-v1.0.2.apk
+          cp release-apk/AyushServer-v1.0.2.apk release-apk/AyushServer.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -61,26 +61,21 @@ jobs:
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.1-app
-          name: "AyushServer Standalone App v1.0.1"
+          tag_name: v1.0.2-app
+          name: "AyushServer Standalone App v1.0.2"
           body: |
-            ### 📱 AyushServer Standalone Android APK v1.0.1
+            ### 📱 AyushServer Standalone Android APK v1.0.2
 
-            **Permanent Signing Key Added:** Future updates can now be installed directly over existing versions without package conflicts!
+            **Bug Fixes & UX Enhancements:**
+            * 🖥️ **Full Desktop Site Mode:** Native viewport override (1200px width) scaling the full PC layout to phone screen like Chrome.
+            * 🔍 **Enhanced Page Zoom:** CSS-powered full-page zoom engine with real-time presets (75%, 100%, 125%, 150%) that zoom images, layouts, and text seamlessly.
+            * ✍️ **High-Contrast Visible Input Typing:** Fixed dark theme inputs across the app and login page so typed text is always crisp and visible (no black-on-black or white-on-white text).
+            * 🌓 **Algorithmic Darkening Fix:** Disabled WebView algorithmic darkening that previously corrupted dark theme input fields.
+            * 🔐 **Signed with Persistent Key:** Automatic 1-click update without package conflict.
 
-            **Features in this release:**
-            * ☰ **App Options Menu:** Three-line toggle menu with smooth bottom sheet controls.
-            * 🖥️ **Desktop Site Toggle:** Switch between mobile and desktop layout on the fly.
-            * 🔍 **Page Zoom Controls:** Zoom In / Zoom Out and 80%, 100%, 125% quick presets.
-            * 📥 **Downloads Manager:** Real-time download tracking, download history, and direct file open/share actions.
-            * 📁 **Custom Download Folder:** Set and customize download paths (defaults to `Download/AyushServer`).
-            * 🌐 **Server Switcher:** Switch between local Termux server (`127.0.0.1:3000`) or any remote network IP.
-            * 🖼️ **Image Studio Fixed:** Native file picker integrated for smooth photo & document uploads.
-            * 🔄 **Seamless In-App Updater:** Future app & tool updates install cleanly without uninstalling.
-
-            **Download:** Download `AyushServer-v1.0.1.apk` below.
+            **Download:** Download `AyushServer-v1.0.2.apk` below.
           files: |
-            release-apk/AyushServer-v1.0.1.apk
+            release-apk/AyushServer-v1.0.2.apk
             release-apk/AyushServer.apk
           draft: false
           prerelease: false
