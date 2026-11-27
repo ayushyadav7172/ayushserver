@@ -675,7 +675,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, (14 * density).toInt(), 0, (14 * density).toInt())
         }
         val updateTitle = TextView(this).apply {
-            val appVer = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.3" } catch (e: Exception) { "1.0.3" }
+            val appVer = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.04" } catch (e: Exception) { "1.0.04" }
             text = "🔄  App & Tools Update (v$appVer)"
             textSize = 14f
             setTextColor(Color.parseColor("#E2E8F0"))

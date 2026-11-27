@@ -44,38 +44,39 @@ jobs:
       - name: Build Release APK
         working-directory: ./android
         run: |
-          gradle assembleRelease --no-daemon --stacktrace || (echo "Retrying gradle build on transient network error..." && sleep 10 && gradle assembleRelease --no-daemon --stacktrace)
+          gradle assembleRelease --no-daemon --stacktrace || (echo "Retrying gradle build on transient network error..." && sleep 15 && gradle assembleRelease --no-daemon --stacktrace)
 
       - name: Prepare APK Package
         run: |
           mkdir -p release-apk
-          cp android/app/build/outputs/apk/release/*.apk release-apk/AyushServer-v1.0.3.apk
+          cp android/app/build/outputs/apk/release/*.apk release-apk/AyushServer-v1.0.04.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: AyushServer-Standalone-APK
-          path: release-apk/AyushServer-v1.0.3.apk
+          path: release-apk/AyushServer-v1.0.04.apk
           retention-days: 30
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.3-app
-          name: "AyushServer Standalone App v1.0.3"
+          tag_name: v1.0.04-app
+          name: "AyushServer Standalone App v1.0.04"
           body: |
-            ### 📱 AyushServer Standalone Android APK v1.0.3
+            ### 📱 AyushServer Standalone Android APK v1.0.04
 
             **Offline Protection & Live Sync:**
             * 🛡️ **Zero Ghost Pages When Server is Off:** App probes server liveness before loading. If Termux server is offline, it immediately renders the "Server Offline" connection screen without showing stale/cached pages.
             * ⚡ **Auto-Reconnection:** As soon as Termux server is started, app auto-detects it within 2 seconds and loads the live studio.
             * 🔄 **Network-Only Document Navigation:** Service worker purged of cached HTML documents so offline requests never show misleading cached mockups.
+            * 🌐 **Resilient Build Pipeline:** Multiple Maven CDN mirrors and Gradle retry configurations to ensure reliable APK generation.
             * 🖥️ **Full Desktop Site View:** Native 1200px viewport override.
             * 🔍 **Full Page Zoom & Presets:** Smooth real-time scaling (75%, 100%, 125%, 150%).
             * ✍️ **High-Contrast Input Typing:** Crisp visible text on dark theme.
 
-            **Download:** Download `AyushServer-v1.0.3.apk` below.
-          files: release-apk/AyushServer-v1.0.3.apk
+            **Download:** Download `AyushServer-v1.0.04.apk` below.
+          files: release-apk/AyushServer-v1.0.04.apk
           draft: false
           prerelease: false
         env:
