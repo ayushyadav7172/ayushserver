@@ -32,6 +32,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.*
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -140,7 +142,7 @@ class MainActivity : AppCompatActivity() {
             )
             setColorSchemeColors(ContextCompat.getColor(context, android.R.color.holo_blue_bright))
             setOnRefreshListener {
-                webView.reload()
+                loadServer()
             }
         }
 
@@ -203,7 +205,7 @@ class MainActivity : AppCompatActivity() {
         settings.allowFileAccess = true
         settings.allowContentAccess = true
         settings.mediaPlaybackRequiresUserGesture = false
-        settings.cacheMode = WebSettings.LOAD_DEFAULT
+        settings.cacheMode = WebSettings.LOAD_NO_CACHE
 
         webView.setBackgroundColor(Color.parseColor("#0F1115"))
 
@@ -673,7 +675,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, (14 * density).toInt(), 0, (14 * density).toInt())
         }
         val updateTitle = TextView(this).apply {
-            val appVer = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.2" } catch (e: Exception) { "1.0.2" }
+            val appVer = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.3" } catch (e: Exception) { "1.0.3" }
             text = "🔄  App & Tools Update (v$appVer)"
             textSize = 14f
             setTextColor(Color.parseColor("#E2E8F0"))
@@ -951,6 +953,13 @@ class MainActivity : AppCompatActivity() {
                 showHamburgerMenu()
             }
         }
+
+        @JavascriptInterface
+        fun reloadServer() {
+            runOnUiThread {
+                loadServer()
+            }
+        }
     }
 
     private fun setupBackNavigation() {
@@ -968,7 +977,49 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadServer() {
         swipeRefreshLayout.isRefreshing = true
-        webView.loadUrl(serverUrl)
+        val target = serverUrl
+        CoroutineScope(Dispatchers.IO).launch {
+            val isLive = isServerAlive(target)
+            withContext(Dispatchers.Main) {
+                if (isLive) {
+                    webView.loadUrl(target)
+                } else {
+                    swipeRefreshLayout.isRefreshing = false
+                    progressBar.visibility = View.GONE
+                    showOfflinePage()
+                }
+            }
+        }
+    }
+
+    private fun isServerAlive(rawUrl: String): Boolean {
+        return try {
+            val clean = sanitizeUrl(rawUrl).trimEnd('/')
+            val probeUrl = "$clean/api/health/live"
+            val conn = (URL(probeUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1500
+                readTimeout = 1500
+                instanceFollowRedirects = false
+            }
+            val code = conn.responseCode
+            conn.disconnect()
+            code in 200..399
+        } catch (_: Exception) {
+            try {
+                val conn = (URL(sanitizeUrl(rawUrl)).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "HEAD"
+                    connectTimeout = 1200
+                    readTimeout = 1200
+                    instanceFollowRedirects = false
+                }
+                val code = conn.responseCode
+                conn.disconnect()
+                code in 200..399
+            } catch (_: Exception) {
+                false
+            }
+        }
     }
 
     private fun showOfflinePage() {
@@ -1024,7 +1075,11 @@ class MainActivity : AppCompatActivity() {
               <script>
                 function retry() {
                   document.getElementById('st').textContent = 'Reconnecting...';
-                  window.location.href = '$current';
+                  if (window.AyushAndroid && window.AyushAndroid.reloadServer) {
+                    window.AyushAndroid.reloadServer();
+                  } else {
+                    window.location.href = '$current';
+                  }
                 }
                 function applyIp() {
                   const val = document.getElementById('customInput').value.trim();
@@ -1043,10 +1098,15 @@ class MainActivity : AppCompatActivity() {
                   }
                 }
                 setInterval(() => {
-                  fetch('$current/api/health/live')
-                    .then(res => { if (res.ok) window.location.href = '$current'; })
+                  fetch('$current'.replace(/\/+$/, '') + '/api/health/live', { method: 'GET', cache: 'no-store' })
+                    .then(res => {
+                      if (res.ok) {
+                        document.getElementById('st').textContent = 'Server detected online! Loading...';
+                        setTimeout(() => retry(), 400);
+                      }
+                    })
                     .catch(() => {});
-                }, 2500);
+                }, 2000);
               </script>
             </body>
             </html>

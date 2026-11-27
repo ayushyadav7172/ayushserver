@@ -49,8 +49,8 @@ jobs:
       - name: Prepare APK Package
         run: |
           mkdir -p release-apk
-          cp android/app/build/outputs/apk/release/*.apk release-apk/AyushServer-v1.0.2.apk
-          cp release-apk/AyushServer-v1.0.2.apk release-apk/AyushServer.apk
+          cp android/app/build/outputs/apk/release/*.apk release-apk/AyushServer-v1.0.3.apk
+          cp release-apk/AyushServer-v1.0.3.apk release-apk/AyushServer.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -62,21 +62,22 @@ jobs:
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.2-app
-          name: "AyushServer Standalone App v1.0.2"
+          tag_name: v1.0.3-app
+          name: "AyushServer Standalone App v1.0.3"
           body: |
-            ### 📱 AyushServer Standalone Android APK v1.0.2
+            ### 📱 AyushServer Standalone Android APK v1.0.3
 
-            **Bug Fixes & UX Enhancements:**
-            * 🖥️ **Full Desktop Site Mode:** Native viewport override (1200px width) scaling the full PC layout to phone screen like Chrome.
-            * 🔍 **Enhanced Page Zoom:** CSS-powered full-page zoom engine with real-time presets (75%, 100%, 125%, 150%) that zoom images, layouts, and text seamlessly.
-            * ✍️ **High-Contrast Visible Input Typing:** Fixed dark theme inputs across the app and login page so typed text is always crisp and visible (no black-on-black or white-on-white text).
-            * 🌓 **Algorithmic Darkening Fix:** Disabled WebView algorithmic darkening that previously corrupted dark theme input fields.
-            * 🔐 **Signed with Persistent Key:** Automatic 1-click update without package conflict.
+            **Offline Protection & Live Sync:**
+            * 🛡️ **Zero Ghost Pages When Server is Off:** App probes server liveness before loading. If Termux server is offline, it immediately renders the "Server Offline" connection screen without showing stale/cached pages.
+            * ⚡ **Auto-Reconnection:** As soon as Termux server is started, app auto-detects it within 2 seconds and loads the live studio.
+            * 🔄 **Network-Only Document Navigation:** Service worker purged of cached HTML documents so offline requests never show misleading cached mockups.
+            * 🖥️ **Full Desktop Site View:** Native 1200px viewport override.
+            * 🔍 **Full Page Zoom & Presets:** Smooth real-time scaling (75%, 100%, 125%, 150%).
+            * ✍️ **High-Contrast Input Typing:** Crisp visible text on dark theme.
 
-            **Download:** Download `AyushServer-v1.0.2.apk` below.
+            **Download:** Download `AyushServer-v1.0.3.apk` below.
           files: |
-            release-apk/AyushServer-v1.0.2.apk
+            release-apk/AyushServer-v1.0.3.apk
             release-apk/AyushServer.apk
           draft: false
           prerelease: false

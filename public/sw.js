@@ -1,8 +1,7 @@
 'use strict';
 
-const CACHE_NAME = 'ayushserver-v1';
+const CACHE_NAME = 'ayushserver-v2';
 const STATIC_ASSETS = [
-  '/',
   '/style.css',
   '/manifest.json',
   '/icons/icon-192.png',
@@ -39,7 +38,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Stale-while-revalidate for static shell assets
+  // CRITICAL: HTML Navigation Requests MUST ALWAYS BE NETWORK-ONLY!
+  // If the server is stopped/offline, NEVER return stale cached HTML.
+  // Let the browser or app display the offline connection screen.
+  if (
+    event.request.mode === 'navigate' ||
+    (event.request.headers.get('accept') && event.request.headers.get('accept').includes('text/html'))
+  ) {
+    return;
+  }
+
+  // Stale-while-revalidate ONLY for static assets (icons, css, manifest)
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       const fetchPromise = fetch(event.request).then((networkResponse) => {
