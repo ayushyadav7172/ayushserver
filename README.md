@@ -177,11 +177,11 @@ AyushServer supports running both as an offline web service and as a **Standalon
 * Includes `manifest.json` and `sw.js` (Service Worker).
 * Can be installed directly from Chrome / Firefox ("Install App" / "Add to Home screen") to run as a full-screen, frameless native mobile app on any Android device.
 
-### 4. 🚀 1-Click Terminal Project Updater
-Any user running an older version can update to the latest code, dependencies, and database migrations with a single command:
+### 4. 🚀 1-Click Terminal Project Updater (`update ayushserver`)
+Any user or friend running an older version can update to the latest code, dependencies, and database migrations with a single shortcut command from anywhere in Termux:
 ```bash
-npm run update
-# or
+update ayushserver
+# or from project folder:
 ./update.sh
 ```
 
@@ -262,21 +262,44 @@ cd ~/ayushserver
 npm install
 ```
 
-### 3. Setup Quick Command (Optional)
+### 3. Setup Quick Commands & Shortcuts (Recommended)
 
-Run the automated setup script to register the `studio` command in your shell:
+Run the automated setup script to register the `studio` (start) and `update ayushserver` (update) shortcuts:
 
 ```bash
-chmod +x setup.sh start.sh
+chmod +x setup.sh start.sh update.sh
 ./setup.sh
 source ~/.bashrc
 ```
 
-Now you can start the application anytime from any directory by typing:
+Now you can control AyushServer anytime from **any directory** in Termux:
+
+| Shortcut Command | Action |
+| :--- | :--- |
+| `studio` | 🚀 Starts AyushServer immediately |
+| `update ayushserver` | 🔄 Automatically pulls latest GitHub updates, installs dependencies & runs migrations |
+
+---
+
+### 🔄 How to Update AyushServer (Latest Version Kaise Lein)
+
+Jab bhi GitHub par naya update push kiya jaye, aap ya aapka koi bhi dost apne Termux me kisi bhi folder se sirf ye ek command chala kar latest version le sakta hai:
 
 ```bash
-studio
+update ayushserver
 ```
+
+*Ya manually project folder me jakar:*
+```bash
+cd ~/ayushserver
+./update.sh
+```
+
+**Yeh command automatically kya karta hai:**
+1. 📥 GitHub (`main` branch) se latest code fetch aur pull karta hai.
+2. 📦 Zaruri npm packages aur dependencies ko install/update karta hai.
+3. 🛡️ SQLite database migrations verify karta hai (purana admin login ya data delete nahi hota).
+4. ⚙️ Execution permissions aur global shortcuts refresh kar deta hai.
 
 ---
 

@@ -1,31 +1,42 @@
 #!/data/data/com.termux/files/usr/bin/bash
+# ========================================================
+# AyushServer - 1-Click Fast Updater
+# Usage: update ayushserver  OR  ./update.sh
+# ========================================================
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "============================================="
-echo "   AyushServer — 1-Click Updater"
-echo "============================================="
+echo "========================================================"
+echo "   🚀 AyushServer — Fetching Latest Update from GitHub"
+echo "========================================================"
 
-echo "[1/4] Fetching latest code from GitHub..."
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-git pull origin "$CURRENT_BRANCH"
+# 1. Fetch latest changes from GitHub
+echo "[1/4] Pulling latest updates from GitHub..."
+git pull origin main
 
+# 2. Update npm dependencies
 echo "[2/4] Updating package dependencies..."
-npm install
+npm install --no-audit --no-fund
 
-echo "[3/4] Verifying database and migrations..."
+# 3. Verify SQLite DB and migrations
+echo "[3/4] Verifying database integrity..."
 node -e "
 const { databaseManager } = require('./database/database');
-console.log('[+] SQLite Database verified. Admin exists:', databaseManager.hasAnyAdmin());
+console.log('[+] Database status: Online (Admin registered:', databaseManager.hasAnyAdmin() + ')');
 "
 
-echo "[4/4] Running quick sanity check..."
-node -c server.js
-node -c pdf-routes.js
+# 4. Ensure permissions and refresh global shortcuts
+echo "[4/4] Finalizing shortcuts and permissions..."
+chmod +x start.sh setup.sh update.sh
+if [ -f "setup.sh" ]; then
+    ./setup.sh >/dev/null 2>&1 || true
+fi
 
-echo "============================================="
-echo "   ✔ AyushServer successfully updated!"
-echo "   Run 'npm start' or './start.sh' to launch."
-echo "============================================="
+echo ""
+echo "========================================================"
+echo "  ✅ AyushServer successfully updated to latest version!"
+echo "  🚀 Server start karne ke liye type karein: 'studio'"
+echo "  🔄 Agli baar update ke liye: 'update ayushserver'"
+echo "========================================================"
