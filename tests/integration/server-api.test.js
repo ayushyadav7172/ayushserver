@@ -18,9 +18,10 @@ describe('API Integration: Server, Health, Analytics, Queue & Storage', () => {
   before(async () => {
     databaseManager.init();
     if (databaseManager.hasAnyAdmin()) {
+      const admin = databaseManager.getAllAdmins()[0];
       const session = databaseManager.createAuthSession({
-        userId: 'integration_test_admin',
-        username: 'admin',
+        userId: admin ? admin.id : null,
+        username: admin ? admin.username : 'admin',
         role: 'admin'
       });
       adminCookie = `ayush_auth_token=${session.token}`;

@@ -14,9 +14,10 @@ describe('Network & CORS Validation: Cellular (ccmni), Hotspot (ap0), LAN & IPv6
   before(async () => {
     databaseManager.init();
     if (databaseManager.hasAnyAdmin()) {
+      const admin = databaseManager.getAllAdmins()[0];
       const session = databaseManager.createAuthSession({
-        userId: 'cors_test_admin',
-        username: 'admin',
+        userId: admin ? admin.id : null,
+        username: admin ? admin.username : 'admin',
         role: 'admin'
       });
       adminCookie = `ayush_auth_token=${session.token}`;

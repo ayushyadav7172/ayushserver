@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "update": "bash update.sh",
     "dev": "nodemon",
     "reset-admin": "node scripts/reset-admin.js",
     "test": "node --test --test-concurrency=1 tests/unit/*.test.js tests/integration/server-api.test.js tests/integration/job-lifecycle.test.js",

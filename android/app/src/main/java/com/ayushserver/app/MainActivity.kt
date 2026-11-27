@@ -2,15 +2,20 @@ package com.ayushserver.app
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.view.Gravity
 import android.view.View
 import android.webkit.*
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -26,11 +31,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var swipeRefreshLayout: SwipeRefreshLayout
     private lateinit var progressBar: ProgressBar
-    private lateinit var errorLayout: View
-    private lateinit var errorText: TextView
+    private lateinit var settingsFab: TextView
+
+    private val prefs by lazy { getSharedPreferences("ayush_server_settings", Context.MODE_PRIVATE) }
+    private var serverUrl: String
+        get() = prefs.getString("custom_server_url", "http://127.0.0.1:3000") ?: "http://127.0.0.1:3000"
+        set(value) {
+            val cleaned = sanitizeUrl(value)
+            prefs.edit().putString("custom_server_url", cleaned).apply()
+        }
 
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
-    private val serverUrl = "http://127.0.0.1:3000"
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -44,7 +55,7 @@ class MainActivity : AppCompatActivity() {
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
+    ) { _ ->
         checkStoragePermission()
     }
 
@@ -67,6 +78,15 @@ class MainActivity : AppCompatActivity() {
         requestAppPermissions()
 
         loadServer()
+    }
+
+    private fun sanitizeUrl(input: String): String {
+        var url = input.trim()
+        if (url.isEmpty()) return "http://127.0.0.1:3000"
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            url = "http://$url"
+        }
+        return url.trimEnd('/')
     }
 
     private fun setupViews() {
@@ -100,9 +120,81 @@ class MainActivity : AppCompatActivity() {
             visibility = View.GONE
         }
 
+        // Floating Settings & IP Switcher button (bottom right corner)
+        val bgDrawable = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor("#CC181A20"))
+            setStroke(2, Color.parseColor("#38BDF8"))
+        }
+
+        settingsFab = TextView(this).apply {
+            text = "🌐"
+            textSize = 18f
+            gravity = Gravity.CENTER
+            background = bgDrawable
+            alpha = 0.85f
+            contentDescription = "Change Server IP"
+            val size = (44 * resources.displayMetrics.density).toInt()
+            val margin = (16 * resources.displayMetrics.density).toInt()
+            layoutParams = FrameLayout.LayoutParams(size, size).apply {
+                gravity = Gravity.BOTTOM or Gravity.END
+                setMargins(margin, margin, margin, margin + (40 * resources.displayMetrics.density).toInt())
+            }
+            setOnClickListener {
+                showServerUrlDialog()
+            }
+        }
+
         rootLayout.addView(swipeRefreshLayout)
         rootLayout.addView(progressBar)
+        rootLayout.addView(settingsFab)
         setContentView(rootLayout)
+    }
+
+    fun showServerUrlDialog() {
+        val editText = EditText(this).apply {
+            setText(serverUrl)
+            hint = "http://192.168.1.15:3000"
+            setSelection(text.length)
+            setPadding(32, 24, 32, 24)
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("AyushServer Connection")
+            .setMessage("Enter the IP and port of the device running AyushServer:\n(e.g., 192.168.1.15:3000 or 127.0.0.1:3000)")
+            .setView(editText)
+            .setPositiveButton("Connect") { _, _ ->
+                val newUrl = editText.text.toString().trim()
+                if (newUrl.isNotEmpty()) {
+                    serverUrl = newUrl
+                    loadServer()
+                }
+            }
+            .setNeutralButton("Reset Localhost") { _, _ ->
+                serverUrl = "http://127.0.0.1:3000"
+                loadServer()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    inner class WebAppInterface {
+        @JavascriptInterface
+        fun updateServerUrl(newUrl: String) {
+            runOnUiThread {
+                serverUrl = newUrl
+                loadServer()
+            }
+        }
+
+        @JavascriptInterface
+        fun openServerSettings() {
+            runOnUiThread {
+                showServerUrlDialog()
+            }
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -116,6 +208,8 @@ class MainActivity : AppCompatActivity() {
         settings.mediaPlaybackRequiresUserGesture = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         settings.setSupportZoom(false)
+
+        webView.addJavascriptInterface(WebAppInterface(), "AyushAndroid")
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -190,6 +284,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showOfflinePage() {
+        val current = serverUrl
         val html = """
             <!DOCTYPE html>
             <html lang="en">
@@ -199,36 +294,69 @@ class MainActivity : AppCompatActivity() {
               <title>Server Offline</title>
               <style>
                 * { box-sizing: border-box; }
-                body { background: #0f1115; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 24px; text-align: center; }
-                .card { background: #181a20; border: 1px solid #2d3139; border-radius: 20px; padding: 32px 24px; max-width: 380px; width: 100%; box-shadow: 0 12px 30px rgba(0,0,0,0.6); }
-                .icon { font-size: 52px; margin-bottom: 16px; }
-                h2 { margin: 0 0 10px; font-size: 22px; color: #38bdf8; font-weight: 700; }
-                p { color: #94a3b8; font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
-                .code-box { background: #090a0d; color: #22c55e; padding: 12px 16px; border-radius: 10px; font-family: monospace; font-size: 14px; font-weight: 600; margin-bottom: 24px; border: 1px solid rgba(34,197,94,0.25); word-break: break-all; }
-                .btn { background: #38bdf8; color: #000; font-weight: 700; border: none; padding: 14px 20px; border-radius: 10px; font-size: 15px; cursor: pointer; width: 100%; transition: opacity 0.2s; }
+                body { background: #0f1115; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; text-align: center; }
+                .card { background: #181a20; border: 1px solid #2d3139; border-radius: 20px; padding: 28px 20px; max-width: 400px; width: 100%; box-shadow: 0 12px 30px rgba(0,0,0,0.6); }
+                .icon { font-size: 48px; margin-bottom: 12px; }
+                h2 { margin: 0 0 8px; font-size: 20px; color: #38bdf8; font-weight: 700; }
+                p { color: #94a3b8; font-size: 13px; line-height: 1.5; margin: 0 0 16px; }
+                .target-box { background: #090a0d; color: #38bdf8; padding: 10px 14px; border-radius: 10px; font-family: monospace; font-size: 13px; margin-bottom: 16px; border: 1px solid rgba(56,189,248,0.25); word-break: break-all; }
+                .btn { background: #38bdf8; color: #000; font-weight: 700; border: none; padding: 12px 18px; border-radius: 10px; font-size: 14px; cursor: pointer; width: 100%; transition: opacity 0.2s; }
                 .btn:active { opacity: 0.8; }
-                .status { font-size: 12px; color: #64748b; margin-top: 16px; display: flex; align-items: center; justify-content: center; }
-                .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #eab308; margin-right: 6px; animation: pulse 1.5s infinite; }
+                .ip-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2d3139; text-align: left; }
+                .ip-label { font-size: 12px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px; }
+                .input-row { display: flex; gap: 8px; margin-bottom: 8px; }
+                input[type=text] { flex: 1; background: #090a0d; border: 1px solid #38bdf866; color: #fff; padding: 10px 12px; border-radius: 8px; font-size: 13px; font-family: monospace; }
+                input[type=text]:focus { outline: none; border-color: #38bdf8; }
+                .btn-save { background: #22c55e; color: #000; font-weight: 700; border: none; padding: 10px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+                .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #2d3139; padding: 8px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; width: 100%; margin-top: 6px; }
+                .status { font-size: 11px; color: #64748b; margin-top: 14px; display: flex; align-items: center; justify-content: center; }
+                .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #eab308; margin-right: 6px; animation: pulse 1.5s infinite; }
                 @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
               </style>
             </head>
             <body>
               <div class="card">
                 <div class="icon">⚡</div>
-                <h2>Server is Offline</h2>
-                <p>AyushServer is not running in Termux yet.<br>Please open <b>Termux</b> and start the server:</p>
-                <div class="code-box">npm start</div>
-                <button class="btn" onclick="retry()">🔄 Connect to Server</button>
-                <div class="status"><span class="dot"></span><span id="st">Waiting for Termux server (auto-detecting)...</span></div>
+                <h2>Server Not Responding</h2>
+                <p>Cannot reach AyushServer at:</p>
+                <div class="target-box" id="currentTarget">$current</div>
+                <button class="btn" onclick="retry()">🔄 Retry Connection</button>
+
+                <div class="ip-section">
+                  <div class="ip-label">🌐 Connect to Another Device / Custom IP:</div>
+                  <div class="input-row">
+                    <input type="text" id="customInput" placeholder="192.168.1.15:3000" value="$current" />
+                    <button class="btn-save" onclick="applyIp()">Connect</button>
+                  </div>
+                  <button class="btn-ghost" onclick="resetLocal()">Reset Localhost (127.0.0.1:3000)</button>
+                </div>
+
+                <div class="status"><span class="dot"></span><span id="st">Auto-detecting server...</span></div>
               </div>
               <script>
                 function retry() {
-                  document.getElementById('st').textContent = 'Connecting...';
-                  window.location.href = '$serverUrl';
+                  document.getElementById('st').textContent = 'Reconnecting...';
+                  window.location.href = '$current';
+                }
+                function applyIp() {
+                  const val = document.getElementById('customInput').value.trim();
+                  if (!val) return;
+                  if (window.AyushAndroid && window.AyushAndroid.updateServerUrl) {
+                    window.AyushAndroid.updateServerUrl(val);
+                  } else {
+                    window.location.href = val.startsWith('http') ? val : 'http://' + val;
+                  }
+                }
+                function resetLocal() {
+                  if (window.AyushAndroid && window.AyushAndroid.updateServerUrl) {
+                    window.AyushAndroid.updateServerUrl('http://127.0.0.1:3000');
+                  } else {
+                    window.location.href = 'http://127.0.0.1:3000';
+                  }
                 }
                 setInterval(() => {
-                  fetch('$serverUrl/api/health/live')
-                    .then(res => { if (res.ok) window.location.href = '$serverUrl'; })
+                  fetch('$current/api/health/live')
+                    .then(res => { if (res.ok) window.location.href = '$current'; })
                     .catch(() => {});
                 }, 2500);
               </script>

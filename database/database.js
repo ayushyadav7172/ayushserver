@@ -615,9 +615,10 @@ class DatabaseManager {
     if (!this.db) this.init();
     const now = Date.now();
     const maxAgeMs = typeof sessionData.maxAgeMs === 'number' ? sessionData.maxAgeMs : 3600000; // 1 hour default
+    const userExists = sessionData.userId ? this.getUserById(sessionData.userId) : null;
     const record = {
       token: sessionData.token || crypto.randomBytes(32).toString('hex'),
-      user_id: sessionData.userId ? String(sessionData.userId) : null,
+      user_id: userExists ? String(sessionData.userId) : null,
       username: sessionData.username || 'guest',
       role: sessionData.role || 'guest',
       created_at: now,
