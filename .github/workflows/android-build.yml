@@ -38,37 +38,51 @@ jobs:
           yes | sdkmanager --licenses || true
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
-      - name: Build Debug APK
+      - name: Verify Signing Keystore
+        run: |
+          keytool -list -v -keystore android/app/ayush-release.keystore -storepass ayushserver123 || true
+
+      - name: Build Release APK
         working-directory: ./android
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: gradle assembleRelease --no-daemon --stacktrace
 
       - name: Prepare APK Package
         run: |
           mkdir -p release-apk
-          cp android/app/build/outputs/apk/debug/*.apk release-apk/AyushServer-v1.0.0.apk
+          cp android/app/build/outputs/apk/release/*.apk release-apk/AyushServer-v1.0.1.apk
+          cp release-apk/AyushServer-v1.0.1.apk release-apk/AyushServer.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: AyushServer-Standalone-APK
-          path: release-apk/AyushServer-v1.0.0.apk
+          path: release-apk/*.apk
           retention-days: 30
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0-app
-          name: "AyushServer Standalone App v1.0.0"
+          tag_name: v1.0.1-app
+          name: "AyushServer Standalone App v1.0.1"
           body: |
-            ### 📱 AyushServer Standalone Android APK
+            ### 📱 AyushServer Standalone Android APK v1.0.1
 
-            Download and install the APK directly on your Android smartphone:
-            * **Embedded Media Engine:** FFmpeg & native tools support
-            * **Background Service:** Processing continues even when screen is locked
-            * **Direct Phone Storage Access:** Process `/sdcard` videos, images, and documents without cache duplication
+            **Permanent Signing Key Added:** Future updates can now be installed directly over existing versions without package conflicts!
 
-            **Download File Below:** `AyushServer-v1.0.0.apk`
-          files: release-apk/AyushServer-v1.0.0.apk
+            **Features in this release:**
+            * ☰ **App Options Menu:** Three-line toggle menu with smooth bottom sheet controls.
+            * 🖥️ **Desktop Site Toggle:** Switch between mobile and desktop layout on the fly.
+            * 🔍 **Page Zoom Controls:** Zoom In / Zoom Out and 80%, 100%, 125% quick presets.
+            * 📥 **Downloads Manager:** Real-time download tracking, download history, and direct file open/share actions.
+            * 📁 **Custom Download Folder:** Set and customize download paths (defaults to `Download/AyushServer`).
+            * 🌐 **Server Switcher:** Switch between local Termux server (`127.0.0.1:3000`) or any remote network IP.
+            * 🖼️ **Image Studio Fixed:** Native file picker integrated for smooth photo & document uploads.
+            * 🔄 **Seamless In-App Updater:** Future app & tool updates install cleanly without uninstalling.
+
+            **Download:** Download `AyushServer-v1.0.1.apk` below.
+          files: |
+            release-apk/AyushServer-v1.0.1.apk
+            release-apk/AyushServer.apk
           draft: false
           prerelease: false
         env:

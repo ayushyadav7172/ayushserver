@@ -28,6 +28,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.*
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -579,6 +580,45 @@ class MainActivity : AppCompatActivity() {
         serverSection.addView(serverDesc)
         serverSection.addView(serverRow)
         container.addView(serverSection)
+
+        container.addView(createDivider())
+
+        // 6. App & Tool Updates
+        val updateSection = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, (14 * density).toInt(), 0, (14 * density).toInt())
+        }
+        val updateTitle = TextView(this).apply {
+            val appVer = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.1" } catch (e: Exception) { "1.0.1" }
+            text = "🔄  App & Tools Update (v$appVer)"
+            textSize = 14f
+            setTextColor(Color.parseColor("#E2E8F0"))
+            setTypeface(null, Typeface.BOLD)
+        }
+        val btnCheckUpdate = createMenuButton("Check for APK Updates") {
+            dialog.dismiss()
+            Toast.makeText(this, "Checking for latest update...", Toast.LENGTH_SHORT).show()
+            val updateMgr = ToolUpdateManager(this)
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                val info = updateMgr.checkForUpdates()
+                if (info.isUpdateAvailable && info.downloadUrl != null) {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Update Available (${info.latestVersion})")
+                        .setMessage(if (info.releaseNotes.isNotBlank()) info.releaseNotes else "A newer version of AyushServer is available with new features and fixes.")
+                        .setPositiveButton("Download & Install") { _, _ ->
+                            Toast.makeText(this@MainActivity, "Downloading APK in background...", Toast.LENGTH_LONG).show()
+                            updateMgr.downloadAndInstallApk(info.downloadUrl)
+                        }
+                        .setNegativeButton("Later", null)
+                        .show()
+                } else {
+                    Toast.makeText(this@MainActivity, "App is already up to date!", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        updateSection.addView(updateTitle)
+        updateSection.addView(btnCheckUpdate)
+        container.addView(updateSection)
 
         dialog.setContentView(scrollView)
         dialog.show()
