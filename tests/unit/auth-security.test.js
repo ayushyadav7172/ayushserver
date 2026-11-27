@@ -16,6 +16,8 @@ describe('Security Verification: Authentication, RBAC & Bypass Prevention', () =
   let guestCookie = '';
   let adminToken = '';
   let guestToken = '';
+  let savedUsers = [];
+  let savedSessions = [];
 
   const testUploadFile = path.join(__dirname, '../../uploads/guest_test_sample.mp4');
 
@@ -25,8 +27,12 @@ describe('Security Verification: Authentication, RBAC & Bypass Prevention', () =
     if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
     fs.writeFileSync(testUploadFile, 'dummy content for upload validation');
 
-    // Initialize database
+    // Initialize database and snapshot existing production data
     databaseManager.init();
+    try {
+      savedUsers = databaseManager.db.prepare('SELECT * FROM users').all();
+      savedSessions = databaseManager.db.prepare('SELECT * FROM auth_sessions').all();
+    } catch (e) {}
 
     // Start ephemeral test server
     server = http.createServer(app);
@@ -44,6 +50,26 @@ describe('Security Verification: Authentication, RBAC & Bypass Prevention', () =
     try {
       databaseManager.db.exec('DELETE FROM auth_sessions;');
       databaseManager.db.exec('DELETE FROM users;');
+
+      // Restore user database state as before test
+      if (savedUsers.length > 0) {
+        const insertUser = databaseManager.db.prepare(`
+          INSERT INTO users (id, username, password_hash, salt, role, created_at, last_login)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const u of savedUsers) {
+          insertUser.run(u.id, u.username, u.password_hash, u.salt, u.role, u.created_at, u.last_login);
+        }
+      }
+      if (savedSessions.length > 0) {
+        const insertSession = databaseManager.db.prepare(`
+          INSERT INTO auth_sessions (token, user_id, username, role, created_at, expires_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        for (const s of savedSessions) {
+          insertSession.run(s.token, s.user_id, s.username, s.role, s.created_at, s.expires_at);
+        }
+      }
     } catch (e) {}
     if (fs.existsSync(testUploadFile)) {
       try { fs.unlinkSync(testUploadFile); } catch (e) {}
